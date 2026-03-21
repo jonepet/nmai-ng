@@ -32,21 +32,27 @@ from PIL import Image
 from ultralytics import YOLO
 
 
-def load_category_mapping(annotations_path: Path) -> dict:
-    """Build product_code → category_id mapping from annotations."""
+def load_category_mapping(annotations_path: Path, product_images_dir: Path) -> dict:
+    """Build product_code → category_id mapping using metadata.json + category names."""
     with open(annotations_path) as f:
         coco = json.load(f)
 
+    # category name → id
+    name_to_cat_id = {c["name"]: c["id"] for c in coco["categories"]}
     # category id → name
     cat_names = {c["id"]: c["name"] for c in coco["categories"]}
 
-    # product_code → category_id (from annotations)
+    # Use metadata.json to map product_code → product_name → category_id
+    metadata_path = product_images_dir / "metadata.json"
     code_to_cat = {}
-    for ann in coco["annotations"]:
-        code = ann.get("product_code")
-        cat_id = ann.get("category_id")
-        if code and cat_id is not None:
-            code_to_cat[code] = cat_id
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            meta = json.load(f)
+        for p in meta.get("products", []) + meta.get("missing", []):
+            name = p.get("product_name", "")
+            code = p.get("product_code", "")
+            if name in name_to_cat_id and code:
+                code_to_cat[code] = name_to_cat_id[name]
 
     return code_to_cat, cat_names
 
@@ -117,7 +123,7 @@ def main():
 
     # Load mappings
     print("\nLoading category mappings...")
-    code_to_cat, cat_names = load_category_mapping(annotations_path)
+    code_to_cat, cat_names = load_category_mapping(annotations_path, product_images_dir)
     print(f"  {len(code_to_cat)} product codes mapped to categories")
 
     # Find all product reference images
