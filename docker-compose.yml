@@ -188,12 +188,9 @@ services:
       - ./data:/data:ro
       - ./scripts/sandbox_run.py:/workspace/sandbox_run.py:ro
       - ./config.py:/workspace/config.py:ro
-      - /tmp/sandbox_output:/output
     working_dir: /workspace
-    user: "sandbox"
-    read_only: true
     tmpfs:
-      - /tmp:size=1G
+      - /tmp:size=2G
     deploy:
       resources:
         limits:
@@ -205,4 +202,4 @@ services:
       - HOME=/tmp
       - CUDA_VISIBLE_DEVICES=""
     entrypoint: ["python"]
-    command: ["/workspace/sandbox_run.py", "--dir", "/submission", "--annotations", "/data/coco_dataset/train/annotations.json", "--images", "/data/yolo/val/images", "--data-images-dir", "/tmp/images", "--output-dir", "/output"]
+    command: ["/workspace/sandbox_run.py", "--dir", "/submission", "--annotations", "/data/coco_dataset/train/annotations.json", "--images", "/data/coco_dataset/train/images", "--data-images-dir", "/tmp/images", "--output-dir", "/tmp/output"]
