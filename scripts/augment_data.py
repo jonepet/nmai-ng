@@ -56,47 +56,24 @@ def build_pipelines() -> dict[str, A.BasicTransform]:
             ],
             bbox_params=BBOX_PARAMS,
         ),
-        "blur": A.Compose(
-            [A.GaussianBlur(blur_limit=(5, 11), p=1.0)],
-            bbox_params=BBOX_PARAMS,
-        ),
-        "sharp": A.Compose(
-            [A.Sharpen(alpha=(0.3, 0.7), lightness=(0.7, 1.3), p=1.0)],
-            bbox_params=BBOX_PARAMS,
-        ),
-        "noise": A.Compose(
-            [A.GaussNoise(var_limit=(20, 80), p=1.0)],
-            bbox_params=BBOX_PARAMS,
-        ),
-        "jpeg": A.Compose(
-            [A.ImageCompression(quality_lower=30, quality_upper=60, p=1.0)],
-            bbox_params=BBOX_PARAMS,
-        ),
         "color": A.Compose(
-            [A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.4, hue=0.1, p=1.0)],
+            [A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.4, hue=0.1, p=1.0)],
             bbox_params=BBOX_PARAMS,
         ),
         "perspective": A.Compose(
-            [A.Perspective(scale=(0.02, 0.06), p=1.0)],
-            bbox_params=BBOX_PARAMS,
-        ),
-        "rain": A.Compose(
             [
-                A.RandomRain(
-                    brightness_coefficient=0.8,
-                    drop_width=1,
-                    blur_value=3,
-                    p=1.0,
-                )
+                A.Perspective(scale=(0.02, 0.06), p=1.0),
+                A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.5),
             ],
             bbox_params=BBOX_PARAMS,
         ),
         "combined": A.Compose(
             [
-                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
-                A.GaussNoise(var_limit=(10, 40), p=0.5),
+                A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
+                A.GaussNoise(var_limit=(10, 40), p=0.3),
                 A.GaussianBlur(blur_limit=(3, 7), p=0.3),
                 A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.2, hue=0.05, p=0.5),
+                A.ImageCompression(quality_lower=40, quality_upper=70, p=0.3),
             ],
             bbox_params=BBOX_PARAMS,
         ),

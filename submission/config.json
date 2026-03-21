@@ -1,8 +1,13 @@
 {
   "model_files": ["best_main.onnx", "best_parallel.onnx"],
+  "checkpoint_mapping": {
+    "best_main.onnx": "best_final.pt",
+    "best_parallel.onnx": "best_parallel_gpu0.pt"
+  },
   "imgsz": 640,
   "conf_threshold": 0.25,
   "wbf_iou_threshold": 0.55,
   "wbf_score_threshold": 0.01,
-  "nc": 356
+  "nc": 356,
+  "onnx_opset": 17
 }

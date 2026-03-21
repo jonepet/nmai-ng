@@ -319,16 +319,14 @@ def main() -> None:
         stage_num = cfg["stage_num"]
 
         # Wire up model path:
-        #   Stage 1     — uses its own pretrained model (from config, e.g. yolov8s.pt)
-        #   Stage 4     — "upgrade" stage, uses its own pretrained model (e.g. yolov8m.pt)
+        #   Stage 1     — uses pretrained model from config
         #   Other stages — load from previous stage's best checkpoint
         if stage_num == 1:
             # Stage 1 always starts from COCO pretrained weights defined in config
             # cfg["model"] is already set to MODEL_PRIMARY from TRAINING_STAGES
             pass
         elif cfg.get("model") is not None:
-            # Stage has an explicit model defined (e.g. Stage 4 upgrade with yolov8m.pt)
-            # Keep it — this stage trains from COCO pretrained weights of its own model
+            # Stage has an explicit model — use it as-is
             pass
         else:
             # Load from the previous stage's best checkpoint

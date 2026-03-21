@@ -213,15 +213,12 @@ BLOCKED_CALLS = {"eval", "exec", "compile", "__import__"}
 # ---------------------------------------------------------------------------
 
 SUBMISSION_MODEL_FILES = _submission_cfg["model_files"]
+SUBMISSION_CHECKPOINT_MAPPING = _submission_cfg["checkpoint_mapping"]
 CONF_THRESHOLD = _submission_cfg["conf_threshold"]
 WBF_IOU_THRESHOLD = _submission_cfg["wbf_iou_threshold"]
 WBF_SCORE_THRESHOLD = _submission_cfg["wbf_score_threshold"]
+ONNX_OPSET = _submission_cfg["onnx_opset"]
 
-# ---------------------------------------------------------------------------
-# ONNX export
-# ---------------------------------------------------------------------------
-
-ONNX_OPSET = 17
 
 # ---------------------------------------------------------------------------
 # Mock endpoint

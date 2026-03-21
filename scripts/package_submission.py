@@ -24,15 +24,11 @@ MAX_WEIGHT_FILES = config.SUBMISSION_MAX_WEIGHT_FILES
 
 BLOCKED_IMPORTS = config.BLOCKED_IMPORTS
 WEIGHT_EXTENSIONS = config.SUBMISSION_WEIGHT_EXTENSIONS
-MODEL_FILES = config.SUBMISSION_MODEL_FILES  # ["best_main.pt", "best_parallel.pt"]
 
 EXCLUDE_PATTERNS = {"__pycache__", ".pyc", "__MACOSX", ".DS_Store"}
 
-# Weight source mapping: submission zip name -> path in submission dir (placed by export script)
-WEIGHT_SOURCES = {
-    "best_main.onnx": SUBMISSION_DIR / "best_main.onnx",
-    "best_parallel.onnx": SUBMISSION_DIR / "best_parallel.onnx",
-}
+# Weight sources derived from submission/config.json model_files list
+WEIGHT_SOURCES = {name: SUBMISSION_DIR / name for name in config.SUBMISSION_MODEL_FILES}
 
 
 def should_exclude(path: Path) -> bool:
@@ -148,12 +144,6 @@ def validate_and_collect() -> list[tuple[Path, str]]:
         else:
             print(f"  Missing weight: {source_path} (skipping {zip_name})")
 
-    # product_embeddings.npy counts as a weight file (.npy extension)
-    emb_path = SUBMISSION_DIR / "product_embeddings.npy"
-    if emb_path.exists():
-        weight_entries.append((emb_path, "product_embeddings.npy"))
-        print(f"  Found weight: {emb_path} -> product_embeddings.npy ({format_size(emb_path.stat().st_size)})")
-
     if not weight_entries:
         errors.append("No weight files found. Need at least one of: " +
                        ", ".join(str(v) for v in WEIGHT_SOURCES.values()))
@@ -168,11 +158,13 @@ def validate_and_collect() -> list[tuple[Path, str]]:
 
     entries.extend(weight_entries)
 
-    # --- Data files (.json) — not weight files, just data ---
-    map_path = SUBMISSION_DIR / "product_mapping.json"
-    if map_path.exists():
-        entries.append((map_path, "product_mapping.json"))
-        print(f"  Found data: {map_path} -> product_mapping.json ({format_size(map_path.stat().st_size)})")
+    # --- config.json — required by run.py ---
+    cfg_path = SUBMISSION_DIR / "config.json"
+    if cfg_path.exists():
+        entries.append((cfg_path, "config.json"))
+        print(f"  Found config: {cfg_path} -> config.json ({format_size(cfg_path.stat().st_size)})")
+    else:
+        errors.append("config.json not found in submission directory")
 
     # --- Total size check ---
     total_size = sum(src.stat().st_size for src, _ in entries)

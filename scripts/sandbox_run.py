@@ -600,7 +600,7 @@ def run_sandbox(
 
     # No timeout enforcement — our GPUs are slower than the L4.
     # Just report the time and estimate L4 runtime.
-    l4_estimate = elapsed * 0.15  # L4 is roughly 6-7x faster than GTX 1050 Ti
+    l4_estimate = elapsed * 0.05  # L4 GPU is ~20x faster than CPU inference
     results["l4_estimate"] = round(l4_estimate, 1)
     if l4_estimate > timeout:
         results["warnings"].append(

@@ -1,13 +1,11 @@
 """
-Parallel diversity training on GPU 1 (GTX 960, 2GB VRAM).
+Parallel diversity training — separate container, single GPU.
 
-Runs in its own Docker container with CUDA_VISIBLE_DEVICES=0 mapped to the
-physical GPU 1. The container only sees one GPU as CUDA:0.
-
-Trains YOLOv8n with different augmentation for ensemble diversity.
+Runs in its own Docker container with CUDA_VISIBLE_DEVICES=0.
+Trains a diversity model with different augmentation for ensemble.
 Saves best checkpoint to checkpoints/best_parallel_gpu0.pt.
 
-All constants are sourced from config.py.
+All constants are sourced from config.py. Hardware from .env.
 """
 
 import shutil

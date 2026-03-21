@@ -29,9 +29,10 @@ def get_file_size_mb(path: Path) -> float:
     return path.stat().st_size / (1024 * 1024)
 
 
+# Derived from submission/config.json checkpoint_mapping
 WEIGHT_MAP = {
-    "best_main": config.CHECKPOINT_ROOT / "best_final.pt",
-    "best_parallel": config.CHECKPOINT_ROOT / "best_parallel_gpu0.pt",
+    onnx_name: config.CHECKPOINT_ROOT / checkpoint_name
+    for onnx_name, checkpoint_name in config.SUBMISSION_CHECKPOINT_MAPPING.items()
 }
 
 
@@ -52,7 +53,7 @@ def export_one(name: str, source_pt: Path, submission_dir: Path) -> bool:
         dynamic=False,
     ))
 
-    dest = submission_dir / f"{name}.onnx"
+    dest = submission_dir / name
     shutil.copy2(onnx_path, dest)
 
     size_mb = get_file_size_mb(dest)
@@ -105,7 +106,7 @@ def main() -> None:
     # Verify with onnxruntime
     import onnxruntime as ort
     import numpy as np
-    first_onnx = submission_dir / f"{list(WEIGHT_MAP.keys())[0]}.onnx"
+    first_onnx = submission_dir / list(WEIGHT_MAP.keys())[0]
     if first_onnx.exists():
         print(f"\nVerifying {first_onnx.name} with onnxruntime...")
         sess = ort.InferenceSession(str(first_onnx), providers=["CPUExecutionProvider"])
