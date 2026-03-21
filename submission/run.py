@@ -316,9 +316,10 @@ def run_ensemble_for_image(
             "score": round(float(fused_scores[i]), 3),
         })
 
-    # Reclassify with product classifier if available
-    if classifier and predictions:
-        predictions = reclassify_detections(predictions, img, classifier)
+    # Classifier reclassification disabled — needs validation on real test data
+    # before enabling. YOLO classification alone is used.
+    # if classifier and predictions:
+    #     predictions = reclassify_detections(predictions, img, classifier)
 
     return predictions
 
