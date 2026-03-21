@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 # System dependencies for OpenCV and pycocotools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,16 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 
-# Install CPU-only PyTorch (no CUDA needed for sandbox testing)
-RUN pip install --no-cache-dir \
-    torch==2.6.0+cpu \
-    torchvision==0.21.0+cpu \
-    --index-url https://download.pytorch.org/whl/cpu
-
-# Install all remaining packages at exact sandbox versions
+# Install all packages at exact sandbox versions
 RUN pip install --no-cache-dir \
     ultralytics==8.1.0 \
-    onnxruntime==1.20.0 \
+    onnxruntime-gpu==1.20.0 \
     opencv-python-headless==4.9.0.80 \
     albumentations==1.3.1 \
     Pillow==10.2.0 \
@@ -39,15 +33,16 @@ RUN pip install --no-cache-dir \
 
 # Remove pip, package managers, compilers
 RUN pip cache purge 2>/dev/null; \
-    rm -rf /usr/local/bin/pip /usr/local/bin/pip3 \
-           /usr/local/bin/easy_install* \
-           /usr/local/lib/python3.11/ensurepip \
+    rm -rf /opt/conda/bin/pip /opt/conda/bin/pip3 \
+           /opt/conda/bin/conda \
+           /opt/conda/bin/easy_install* \
+           /opt/conda/lib/python3.11/ensurepip \
            /usr/bin/apt* /usr/bin/dpkg* /usr/bin/apt-get \
            /usr/bin/gcc /usr/bin/g++ /usr/bin/cc /usr/bin/make \
            /root/.cache/pip; true
 
 # Make site-packages read-only
-RUN chmod -R a-w /usr/local/lib/python3.11/site-packages 2>/dev/null; true
+RUN chmod -R a-w /opt/conda/lib/python3.11/site-packages 2>/dev/null; true
 
 # Create non-root sandbox user
 RUN groupadd -r sandbox && useradd -r -g sandbox -d /workspace -s /bin/bash sandbox

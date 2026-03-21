@@ -28,10 +28,10 @@ MODEL_FILES = config.SUBMISSION_MODEL_FILES  # ["best_main.pt", "best_parallel.p
 
 EXCLUDE_PATTERNS = {"__pycache__", ".pyc", "__MACOSX", ".DS_Store"}
 
-# Weight source mapping: submission zip name -> checkpoint path
+# Weight source mapping: submission zip name -> path in submission dir (placed by export script)
 WEIGHT_SOURCES = {
-    "best_main.pt": CHECKPOINT_ROOT / "best_final.pt",
-    "best_parallel.pt": CHECKPOINT_ROOT / "best_parallel_gpu0.pt",
+    "best_main.pt": SUBMISSION_DIR / "best_main.pt",
+    "best_parallel.pt": SUBMISSION_DIR / "best_parallel.pt",
 }
 
 
