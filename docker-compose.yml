@@ -1,0 +1,168 @@
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=0
+    shm_size: 4g
+    command: python scripts/train.py
+
+  train-parallel:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+    shm_size: 1g
+    command: python scripts/train_parallel.py
+
+  evaluate:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    command: python scripts/evaluate.py --watch --interval 120
+    depends_on:
+      - train
+
+  prepare-data:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+    working_dir: /workspace/project
+    command: python scripts/prepare_data.py
+
+  hard-mining:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=0
+    command: python scripts/hard_mining.py
+
+  augment:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+    working_dir: /workspace/project
+    command: ["sh", "-c", "python scripts/augment_data.py && python scripts/augment_cropmix.py"]
+
+  clean-data:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+    working_dir: /workspace/project
+    command: ["sh", "-c", "rm -rf /workspace/project/data/yolo /workspace/project/data/dataset.yaml /workspace/project/data/_yolo_labels_staging && echo 'Cleaned data directories'"]
+
+  clean-checkpoints:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    command: ["sh", "-c", "rm -rf /workspace/checkpoints/* && echo 'Cleaned checkpoints'"]
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+    working_dir: /workspace/project
+    command: python -m pytest tests/ -v --tb=short
+
+  mock-endpoint:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/workspace/project
+    working_dir: /workspace/project
+    environment:
+      - DATA_DIR=/workspace/project/data
+
+  export:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: python scripts/export_model.py
+
+  package:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+    working_dir: /workspace/project
+    command: python scripts/package_submission.py
+
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    volumes:
+      - ./submission:/submission:ro
+      - ./data:/data:ro
+      - ./scripts/sandbox_run.py:/workspace/sandbox_run.py:ro
+      - ./config.py:/workspace/config.py:ro
+      - /tmp/sandbox_output:/output
+    working_dir: /workspace
+    user: "sandbox"
+    read_only: true
+    tmpfs:
+      - /tmp:size=1G
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 16G
+    network_mode: none
+    environment:
+      - SANDBOX_ENV=1
+      - HOME=/tmp
+      - CUDA_VISIBLE_DEVICES=""
+    entrypoint: ["python"]
+    command: ["/workspace/sandbox_run.py", "--dir", "/submission", "--annotations", "/data/coco_dataset/train/annotations.json", "--images", "/data/yolo/val/images", "--data-images-dir", "/tmp/images", "--output-dir", "/output"]

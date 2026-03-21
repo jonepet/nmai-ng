@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+# Install build deps for pycocotools (requires gcc and C headers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+        flask==3.1.0 \
+        pycocotools==2.0.8 \
+        Pillow==11.1.0 \
+        numpy==2.2.3 \
+        scipy
+
+WORKDIR /workspace/project
+
+EXPOSE 8080
+
+CMD ["python", "tests/mock_endpoint/server.py"]

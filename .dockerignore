@@ -1,0 +1,6 @@
+checkpoints/*
+data/images/*
+data/labels/*
+*.zip
+__pycache__
+.git

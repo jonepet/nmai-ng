@@ -1,0 +1,36 @@
+# Data and datasets
+data/
+*.zip
+
+# Training outputs
+checkpoints/
+*.pt
+*.onnx
+*.safetensors
+*.npy
+*.pth
+
+# Submission zip
+submission.zip
+
+# Sample/training data docs
+overview.txt
+submission.txt
+examples.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Docker build
+/tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
