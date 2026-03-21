@@ -108,7 +108,8 @@ class ProductReID:
 
         # Extract backbone from the YOLO model for feature extraction
         self.backbone = yolo_model.model.model[:10]
-        self.backbone.eval()
+        # Set to inference mode (torch.nn.Module.eval)
+        self.backbone.training = False
 
         # Pre-build transform pipeline (reused for every crop)
         from torchvision import transforms

@@ -6,4 +6,4 @@ source "$(dirname "$0")/env.sh"
 
 SERVICE="${1:-train}"
 echo "==> Restarting $SERVICE on $REMOTE_HOST..."
-ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose restart $SERVICE"
+ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose up -d --force-recreate $SERVICE"
