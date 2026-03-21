@@ -101,7 +101,7 @@ class ProductReID:
             return
 
         self.embeddings = np.load(str(emb_path))  # (N, embed_dim)
-        with open(map_path) as f:
+        with open(map_path, encoding="utf-8") as f:
             self.mapping = json.load(f)
 
         self.category_ids = [m["category_id"] for m in self.mapping]
@@ -110,20 +110,20 @@ class ProductReID:
         self.backbone = yolo_model.model.model[:10]
         self.backbone.eval()
 
-        self.enabled = True
-        print(f"Product re-ID: enabled ({len(self.mapping)} products, dim={self.embeddings.shape[1]})")
-
-    def _extract_embedding(self, crop_img: Image.Image) -> np.ndarray:
-        """Extract normalized feature vector from a cropped product image."""
+        # Pre-build transform pipeline (reused for every crop)
         from torchvision import transforms
-
-        transform = transforms.Compose([
+        self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        tensor = transform(crop_img).unsqueeze(0).to(self.device)
+        self.enabled = True
+        print(f"Product re-ID: enabled ({len(self.mapping)} products, dim={self.embeddings.shape[1]})")
+
+    def _extract_embedding(self, crop_img: Image.Image) -> np.ndarray:
+        """Extract normalized feature vector from a cropped product image."""
+        tensor = self.transform(crop_img).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             features = tensor
@@ -282,6 +282,8 @@ def run_ensemble_for_image(
                 result = reid.reclassify(crop, score)
                 if result is not None:
                     category_id, sim = result
+                    # Use the higher of original score and similarity
+                    score = max(score, sim)
 
         predictions.append({
             "image_id": image_id,

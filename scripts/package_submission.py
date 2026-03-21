@@ -72,6 +72,27 @@ def scan_blocked_imports(py_file: Path) -> list[str]:
     return blocked
 
 
+def scan_blocked_calls(py_file: Path) -> list[str]:
+    """Check for eval(), exec(), compile(), __import__() calls."""
+    source = py_file.read_text(encoding="utf-8", errors="replace")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return [f"SyntaxError in {py_file.name}"]
+    blocked = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = None
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        if name in config.BLOCKED_CALLS:
+            blocked.append(f"{name}() at line {node.lineno}")
+    return blocked
+
+
 def format_size(size_bytes: int) -> str:
     if size_bytes >= 1024 * 1024 * 1024:
         return f"{size_bytes / (1024 ** 3):.2f} GB"
@@ -96,6 +117,9 @@ def validate_and_collect() -> list[tuple[Path, str]]:
         blocked = scan_blocked_imports(run_py)
         if blocked:
             errors.append(f"Blocked import(s) {blocked} in run.py")
+        blocked_calls = scan_blocked_calls(run_py)
+        if blocked_calls:
+            errors.append(f"Blocked call(s) {blocked_calls} in run.py")
 
     # --- Additional .py files ---
     extra_py = sorted(
@@ -107,12 +131,15 @@ def validate_and_collect() -> list[tuple[Path, str]]:
         blocked = scan_blocked_imports(py_file)
         if blocked:
             errors.append(f"Blocked import(s) {blocked} in {py_file.name}")
+        blocked_calls = scan_blocked_calls(py_file)
+        if blocked_calls:
+            errors.append(f"Blocked call(s) {blocked_calls} in {py_file.name}")
 
     py_count = 1 + len(extra_py)
     if py_count > MAX_PY_FILES:
         errors.append(f"Too many .py files: {py_count} (max {MAX_PY_FILES})")
 
-    # --- Weight files ---
+    # --- Weight files (.pt, .npy, etc.) ---
     weight_entries = []
     for zip_name, source_path in WEIGHT_SOURCES.items():
         if source_path.exists():
@@ -120,6 +147,12 @@ def validate_and_collect() -> list[tuple[Path, str]]:
             print(f"  Found weight: {source_path} -> {zip_name} ({format_size(source_path.stat().st_size)})")
         else:
             print(f"  Missing weight: {source_path} (skipping {zip_name})")
+
+    # product_embeddings.npy counts as a weight file (.npy extension)
+    emb_path = SUBMISSION_DIR / "product_embeddings.npy"
+    if emb_path.exists():
+        weight_entries.append((emb_path, "product_embeddings.npy"))
+        print(f"  Found weight: {emb_path} -> product_embeddings.npy ({format_size(emb_path.stat().st_size)})")
 
     if not weight_entries:
         errors.append("No weight files found. Need at least one of: " +
@@ -134,6 +167,12 @@ def validate_and_collect() -> list[tuple[Path, str]]:
             f"Total weight size {format_size(total_weight_bytes)} exceeds {format_size(MAX_SIZE_BYTES)}")
 
     entries.extend(weight_entries)
+
+    # --- Data files (.json) — not weight files, just data ---
+    map_path = SUBMISSION_DIR / "product_mapping.json"
+    if map_path.exists():
+        entries.append((map_path, "product_mapping.json"))
+        print(f"  Found data: {map_path} -> product_mapping.json ({format_size(map_path.stat().st_size)})")
 
     # --- Total size check ---
     total_size = sum(src.stat().st_size for src, _ in entries)
@@ -161,9 +200,9 @@ def build_zip(entries: list[tuple[Path, str]], output_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Package submission zip")
     parser.add_argument("--output", default=None, help="Output zip path")
-    parser.parse_args()
+    args = parser.parse_args()
 
-    output_path = Path(parser.parse_args().output) if parser.parse_args().output else PROJECT_ROOT / "submission.zip"
+    output_path = Path(args.output) if args.output else PROJECT_ROOT / "submission.zip"
 
     print(f"Project root   : {PROJECT_ROOT}")
     print(f"Submission dir : {SUBMISSION_DIR}")
