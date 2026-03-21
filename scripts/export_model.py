@@ -49,7 +49,7 @@ def export_one(name: str, source_pt: Path, submission_dir: Path) -> bool:
         imgsz=config.IMGSZ,
         opset=config.ONNX_OPSET,
         simplify=True,
-        dynamic=True,
+        dynamic=False,
     ))
 
     dest = submission_dir / f"{name}.onnx"

@@ -26,7 +26,7 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 
 MODEL_FILES = ["best_main.onnx", "best_parallel.onnx"]
-INFERENCE_SCALES = [640, 1280]
+INFERENCE_SCALES = [640]  # Fixed — ONNX exported at 640, no dynamic axes
 CONF_THRESHOLD = 0.001
 WBF_IOU_THRESHOLD = 0.55
 WBF_SCORE_THRESHOLD = 0.001

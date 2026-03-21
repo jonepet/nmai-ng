@@ -211,7 +211,7 @@ BLOCKED_CALLS = {"eval", "exec", "compile", "__import__"}
 SUBMISSION_MODEL_FILES = ["best_main.onnx", "best_parallel.onnx"]
 
 # Inference scales — run each model at these image sizes, merge with WBF
-INFERENCE_SCALES = [640, 1280]
+INFERENCE_SCALES = [640]  # Fixed — ONNX exported at 640
 
 # WBF (Weighted Box Fusion) parameters
 WBF_IOU_THRESHOLD = 0.55      # IoU threshold for merging overlapping boxes
