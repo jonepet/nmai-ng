@@ -4,7 +4,7 @@ Train a product classifier on reference product images.
 Uses the product_images/ directory (345 products, ~7 images each) to train
 a lightweight classifier that maps cropped product images to category_ids.
 
-Runs on a separate GPU (GTX 960) or CPU while YOLO trains on GTX 1050 Ti.
+Runs on a separate GPU or CPU in parallel with YOLO detection training.
 """
 
 import json
