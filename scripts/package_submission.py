@@ -144,6 +144,19 @@ def validate_and_collect() -> list[tuple[Path, str]]:
         else:
             print(f"  Missing weight: {source_path} (skipping {zip_name})")
 
+    # Classifier ONNX (optional)
+    import json as _json
+    _sub_cfg_path = SUBMISSION_DIR / "config.json"
+    _sub_cfg = _json.load(open(_sub_cfg_path)) if _sub_cfg_path.exists() else {}
+    classifier_name = _sub_cfg.get("classifier_file")
+    if classifier_name:
+        cls_path = SUBMISSION_DIR / classifier_name
+        if cls_path.exists():
+            weight_entries.append((cls_path, classifier_name))
+            print(f"  Found weight: {cls_path} -> {classifier_name} ({format_size(cls_path.stat().st_size)})")
+        else:
+            print(f"  Classifier not found: {cls_path} (optional, skipping)")
+
     if not weight_entries:
         errors.append("No weight files found. Need at least one of: " +
                        ", ".join(str(v) for v in WEIGHT_SOURCES.values()))

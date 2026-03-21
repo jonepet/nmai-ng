@@ -1,6 +1,8 @@
-checkpoints/*
-data/images/*
-data/labels/*
+data/
+checkpoints/
 *.zip
 __pycache__
 .git
+submission/*.onnx
+submission/*.pt
+submission/*.npy

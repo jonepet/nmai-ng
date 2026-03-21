@@ -307,229 +307,114 @@ def main() -> None:
     config.CHECKPOINT_ROOT.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------------------------------------------------
-    # Multi-stage training — single GPU per container (CUDA:0)
-    # The parallel job runs in a separate container (train-parallel service)
+    # Run augmentation if not already done
     # -----------------------------------------------------------------------
-    stage_configs = [dict(c) for c in config.TRAINING_STAGES]
-    current_lr_override: float | None = None
-    # Track val losses per stage for final model selection
-    stage_val_losses: dict[int, float] = {}
+    augment_scripts = [
+        Path(__file__).resolve().parent / "augment_data.py",
+        Path(__file__).resolve().parent / "augment_cropmix.py",
+    ]
+    yolo_train_dir = config.YOLO_DIR / "train" / "images"
+    n_images = len(list(yolo_train_dir.glob("*"))) if yolo_train_dir.exists() else 0
+    if n_images <= config.EXPECTED_IMAGE_COUNT:
+        print(f"[train] Only {n_images} training images — running augmentation...")
+        for script in augment_scripts:
+            if script.exists():
+                import subprocess as sp
+                result = sp.run([sys.executable, str(script)], capture_output=False)
+                if result.returncode != 0:
+                    print(f"[train] WARNING: {script.name} failed (exit {result.returncode})")
+        n_after = len(list(yolo_train_dir.glob("*")))
+        print(f"[train] Augmentation done: {n_images} → {n_after} images")
+    else:
+        print(f"[train] {n_images} training images (augmented)")
 
-    for i, cfg in enumerate(stage_configs):
-        stage_num = cfg["stage_num"]
+    # -----------------------------------------------------------------------
+    # Continuous training loop: stages → evaluate → update best → repeat
+    # -----------------------------------------------------------------------
+    round_num = 0
 
-        # Wire up model path:
-        #   Stage 1     — uses pretrained model from config
-        #   Other stages — load from previous stage's best checkpoint
-        if stage_num == 1:
-            # Stage 1 always starts from COCO pretrained weights defined in config
-            # cfg["model"] is already set to MODEL_PRIMARY from TRAINING_STAGES
-            pass
-        elif cfg.get("model") is not None:
-            # Stage has an explicit model — use it as-is
-            pass
-        else:
-            # Load from the previous stage's best checkpoint
+    while True:
+        round_num += 1
+        print(f"\n{'='*60}")
+        print(f"[train] ROUND {round_num}")
+        print(f"{'='*60}")
+
+        stage_configs = [dict(c) for c in config.TRAINING_STAGES]
+        best_val_loss = float("inf")
+        best_checkpoint = None
+
+        for i, cfg in enumerate(stage_configs):
+            stage_num = cfg["stage_num"]
+            stage_dir = config.CHECKPOINT_ROOT / cfg["name"]
+
+            # Skip if this stage already completed all its epochs in round 1
+            if round_num == 1:
+                best_stage_pt = config.CHECKPOINT_ROOT / f"best_stage_{stage_num}.pt"
+                if best_stage_pt.exists():
+                    print(f"[train] Stage {stage_num} ({cfg['name']}) already complete, skipping")
+                    continue
+
+            # Load from best available checkpoint
+            best_final = config.CHECKPOINT_ROOT / "best_final.pt"
             prev_best = config.CHECKPOINT_ROOT / f"best_stage_{stage_num - 1}.pt"
             if prev_best.exists():
                 cfg["model"] = str(prev_best)
-                print(
-                    f"[train] Stage {stage_num} loading weights "
-                    f"from {prev_best}"
-                )
-            else:
-                print(
-                    f"[train] WARNING: best_stage_{stage_num - 1}.pt not "
-                    f"found — using default {config.MODEL_PRIMARY} weights."
-                )
-                cfg["model"] = config.MODEL_PRIMARY
+            elif best_final.exists():
+                cfg["model"] = str(best_final)
+            # else: use MODEL_PRIMARY from config (COCO pretrained, first ever run)
 
-        # Apply adaptive lr from previous stage's outcome
-        if current_lr_override is not None:
-            print(
-                f"[train] Overriding lr0 for stage {stage_num}: "
-                f"{cfg['lr0']} -> {current_lr_override}"
-            )
-            cfg["lr0"] = current_lr_override
-            current_lr_override = None
+            print(f"[train] Stage {stage_num} loading from {cfg['model']}")
 
-        clear_cuda_cache()
-
-        success, val_loss = run_stage(cfg, data_yaml)
-
-        if not success:
-            print(
-                f"[train] Stage {stage_num} failed. "
-                "Continuing to next stage if possible."
-            )
-            continue
-
-        if val_loss is not None:
-            stage_val_losses[stage_num] = val_loss
-
-        # Compute adaptive lr for next stage
-        if i + 1 < len(stage_configs):
-            next_cfg = stage_configs[i + 1]
-            adjusted = adjust_lr_between_stages(next_cfg["lr0"], val_loss)
-            if adjusted != next_cfg["lr0"]:
-                current_lr_override = adjusted
-
-    # -----------------------------------------------------------------------
-    # Hard mining rounds: mine failures → augment → retrain
-    # -----------------------------------------------------------------------
-    for hm_round in range(1, config.HARD_MINING_ROUNDS + 1):
-        print(f"\n{'='*60}")
-        print(f"[train] HARD MINING ROUND {hm_round}/{config.HARD_MINING_ROUNDS}")
-        print(f"{'='*60}")
-
-        # Run hard_mining.py as subprocess (separate import scope)
-        import subprocess as sp
-        hm_script = Path(__file__).resolve().parent / "hard_mining.py"
-        if not hm_script.exists():
-            print(f"[train] hard_mining.py not found — skipping")
-            break
-
-        hm_result = sp.run(
-            [sys.executable, str(hm_script)],
-            capture_output=False,
-        )
-        if hm_result.returncode != 0:
-            print(f"[train] Hard mining failed (exit {hm_result.returncode}) — skipping retrain")
-            break
-
-        # Retrain: stages 2+3 only (fine-tune + polish on enriched data)
-        # Start from best checkpoint so far
-        print(f"\n[train] Retraining with hard examples (round {hm_round})...")
-        retrain_stages = [
-            {
-                "name": f"retrain_r{hm_round}_finetune",
-                "stage_num": 100 + hm_round * 10 + 1,
-                "model": None,  # will be set to best_final.pt below
-                "epochs": 30,
-                "lr0": 0.0005,
-                "batch": 4,
-                "imgsz": config.IMGSZ,
-                "device": config.GPU_PRIMARY,
-                "freeze": 0,
-                "pretrained": False,
-                "hsv_h": 0.015, "hsv_s": 0.7, "hsv_v": 0.4,
-                "degrees": 5.0, "translate": 0.1, "scale": 0.5,
-                "flipud": 0.0, "fliplr": 0.5,
-                "mosaic": 1.0, "mixup": 0.1,
-            },
-            {
-                "name": f"retrain_r{hm_round}_polish",
-                "stage_num": 100 + hm_round * 10 + 2,
-                "model": None,  # loaded from previous retrain stage
-                "epochs": 15,
-                "lr0": 0.0001,
-                "batch": 4,
-                "imgsz": config.IMGSZ,
-                "device": config.GPU_PRIMARY,
-                "freeze": 0,
-                "pretrained": False,
-                "hsv_h": 0.005, "hsv_s": 0.3, "hsv_v": 0.2,
-                "degrees": 0.0, "translate": 0.05, "scale": 0.2,
-                "flipud": 0.0, "fliplr": 0.5,
-                "mosaic": 0.5, "mixup": 0.0,
-            },
-        ]
-
-        # Set first retrain stage to load from current best
-        best_so_far = config.CHECKPOINT_ROOT / "best_final.pt"
-        if best_so_far.exists():
-            retrain_stages[0]["model"] = str(best_so_far)
-        else:
-            print(f"[train] No best_final.pt — skipping retrain round {hm_round}")
-            break
-
-        for j, rt_cfg in enumerate(retrain_stages):
-            if j > 0:
-                # Load from previous retrain stage
-                prev_sn = retrain_stages[j - 1]["stage_num"]
-                prev_best = config.CHECKPOINT_ROOT / f"best_stage_{prev_sn}.pt"
-                if prev_best.exists():
-                    rt_cfg["model"] = str(prev_best)
-                else:
-                    rt_cfg["model"] = str(best_so_far)
+            # Scale LR down for later rounds
+            if round_num > 1:
+                lr_scale = max(0.1, 1.0 / round_num)
+                cfg["lr0"] = cfg["lr0"] * lr_scale
+                print(f"[train] Round {round_num} LR scaled: {cfg['lr0']:.6f}")
 
             clear_cuda_cache()
-            success, val_loss = run_stage(rt_cfg, data_yaml)
+            success, val_loss = run_stage(cfg, data_yaml)
 
-            if success and val_loss is not None:
-                stage_val_losses[rt_cfg["stage_num"]] = val_loss
+            if not success:
+                print(f"[train] Stage {stage_num} failed, continuing")
+                continue
 
-        # Update best_final.pt if retrain improved
-        retrain_candidates = []
-        for rt_cfg in retrain_stages:
-            pt = config.CHECKPOINT_ROOT / f"best_stage_{rt_cfg['stage_num']}.pt"
-            if pt.exists():
-                loss = stage_val_losses.get(rt_cfg["stage_num"])
-                if loss is not None:
-                    retrain_candidates.append((loss, pt, rt_cfg["name"]))
+            if val_loss is not None and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_checkpoint = config.CHECKPOINT_ROOT / f"best_stage_{stage_num}.pt"
 
-        if retrain_candidates:
-            retrain_candidates.sort()
-            best_loss, best_pt, best_name = retrain_candidates[0]
-            # Compare with current best
-            current_best_loss = min(
-                (v for k, v in stage_val_losses.items() if k < 100),
-                default=float("inf")
-            )
-            if best_loss < current_best_loss:
-                shutil.copy2(best_pt, config.CHECKPOINT_ROOT / "best_final.pt")
-                print(f"[train] Round {hm_round} improved! {best_name} val_loss={best_loss:.4f} (was {current_best_loss:.4f})")
-            else:
-                print(f"[train] Round {hm_round} did not improve ({best_loss:.4f} >= {current_best_loss:.4f})")
+        # Update best_final.pt
+        if best_checkpoint and best_checkpoint.exists():
+            shutil.copy2(best_checkpoint, config.CHECKPOINT_ROOT / "best_final.pt")
+            print(f"\n[train] Round {round_num} best: val_loss={best_val_loss:.4f} from {best_checkpoint.name}")
+        else:
+            print(f"\n[train] Round {round_num}: no improvement")
 
-    # -----------------------------------------------------------------------
-    # Determine final best model from all stages
-    # (parallel GPU0 model is selected separately by train_parallel.py)
-    # -----------------------------------------------------------------------
-    print("\n[train] Selecting final best model...")
+        # -------------------------------------------------------------------
+        # Feedback loop: evaluate → find failures → augment failures → retrain
+        # -------------------------------------------------------------------
+        best_final = config.CHECKPOINT_ROOT / "best_final.pt"
+        if best_final.exists():
+            print(f"\n[train] Running feedback analysis...")
 
-    # Gather all stage candidates (Stages 1–4 + parallel GPU0)
-    stage_nums_in_config = [c["stage_num"] for c in config.TRAINING_STAGES]
-    candidates: list[tuple[float, Path, str]] = []  # (val_loss, path, label)
+            # Run competition evaluation
+            evaluate_checkpoint(str(best_final), f"round_{round_num}")
 
-    for sn in stage_nums_in_config:
-        pt = config.CHECKPOINT_ROOT / f"best_stage_{sn}.pt"
-        if pt.exists():
-            loss = stage_val_losses.get(sn)
-            if loss is not None:
-                candidates.append((loss, pt, f"stage_{sn}"))
-                print(f"[train]   stage_{sn}: val_loss={loss:.4f}  {pt}")
-            else:
-                # Stage completed but val loss not captured — still a candidate
-                # Use a sentinel high loss so it only wins if nothing else exists
-                candidates.append((float("inf"), pt, f"stage_{sn} (loss unknown)"))
-                print(f"[train]   stage_{sn}: val_loss=unknown  {pt}")
+            # Hard mining: find what the model gets wrong, augment those
+            import subprocess as sp
+            hm_script = Path(__file__).resolve().parent / "hard_mining.py"
+            if hm_script.exists():
+                print(f"[train] Mining hard examples...")
+                hm_result = sp.run(
+                    [sys.executable, str(hm_script)],
+                    capture_output=False,
+                )
+                if hm_result.returncode == 0:
+                    n_images = len(list(yolo_train_dir.glob("*")))
+                    print(f"[train] Hard mining done. Training set: {n_images} images")
+                else:
+                    print(f"[train] Hard mining failed (exit {hm_result.returncode})")
 
-    # Parallel GPU0
-    parallel_pt = config.CHECKPOINT_ROOT / "best_parallel_gpu0.pt"
-    if parallel_pt.exists():
-        # Val loss for parallel job is not tracked in stage_val_losses;
-        # use infinity so it only wins if no main-stage checkpoints exist
-        candidates.append((float("inf"), parallel_pt, "parallel_gpu0 (loss unknown)"))
-        print(f"[train]   parallel_gpu0: val_loss=unknown  {parallel_pt}")
-
-    best_final_dst = config.CHECKPOINT_ROOT / "best_final.pt"
-
-    if candidates:
-        # Sort by val loss ascending; lowest loss wins
-        candidates.sort(key=lambda t: t[0])
-        best_loss, best_src, best_label = candidates[0]
-        shutil.copy2(best_src, best_final_dst)
-        loss_str = f"{best_loss:.4f}" if best_loss != float("inf") else "unknown"
-        print(
-            f"[train] Final best model: {best_final_dst}\n"
-            f"        source: {best_src.name}  ({best_label}, val_loss={loss_str})"
-        )
-    else:
-        print("[train] WARNING: No stage checkpoint found — best_final.pt not created.")
-
-    print("\n[train] All stages complete.")
-    print(f"[train] Checkpoints saved under: {config.CHECKPOINT_ROOT}")
+        print(f"\n[train] Round {round_num} complete. Starting next round...")
 
 
 if __name__ == "__main__":

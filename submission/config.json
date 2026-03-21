@@ -1,13 +1,15 @@
 {
-  "model_files": ["best_main.onnx", "best_parallel.onnx"],
+  "model_files": ["best_main.onnx"],
+  "classifier_file": "classifier.onnx",
+  "classifier_input_size": 128,
   "checkpoint_mapping": {
-    "best_main.onnx": "best_final.pt",
-    "best_parallel.onnx": "best_parallel_gpu0.pt"
+    "best_main.onnx": "best_final.pt"
   },
   "imgsz": 640,
-  "conf_threshold": 0.25,
+  "conf_threshold": 0.001,
   "wbf_iou_threshold": 0.55,
   "wbf_score_threshold": 0.01,
   "nc": 357,
-  "onnx_opset": 17
+  "onnx_opset": 17,
+  "classifier_confidence_threshold": 0.3
 }

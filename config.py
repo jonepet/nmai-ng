@@ -80,7 +80,7 @@ ADAPTIVE_LR_LOW_LOSS = 1.0   # If val loss < this, reduce lr by 10x for next sta
 ADAPTIVE_LR_HIGH_LOSS = 2.0  # If val loss > this, keep lr unchanged
 
 # Hard mining rounds — after stages 1-3, mine hard examples and retrain
-HARD_MINING_ROUNDS = 2       # Number of mine→retrain cycles after initial stages
+HARD_MINING_ROUNDS = 0       # Disabled — using active test loop instead
 
 # Stage configurations
 _BATCH_S1 = _env_int("BATCH_STAGE1", 8)
@@ -93,7 +93,7 @@ TRAINING_STAGES = [
         "name": "warmup",
         "stage_num": 1,
         "model": MODEL_PRIMARY,
-        "epochs": 30,
+        "epochs": 50,
         "lr0": 0.01,
         "batch": _BATCH_S1,
         "imgsz": IMGSZ,
@@ -109,7 +109,7 @@ TRAINING_STAGES = [
         "name": "finetune",
         "stage_num": 2,
         "model": None,
-        "epochs": 50,
+        "epochs": 100,
         "lr0": 0.001,
         "batch": _BATCH_S2,
         "imgsz": IMGSZ,
@@ -125,7 +125,7 @@ TRAINING_STAGES = [
         "name": "polish",
         "stage_num": 3,
         "model": None,
-        "epochs": 20,
+        "epochs": 100,
         "lr0": 0.0001,
         "batch": _BATCH_S3,
         "imgsz": IMGSZ,
@@ -162,7 +162,7 @@ PARALLEL_GPU0_CONFIG = {
 # Data preparation
 # ---------------------------------------------------------------------------
 
-TRAIN_RATIO = 0.80
+TRAIN_RATIO = 0.95
 RANDOM_SEED = 42
 EXPECTED_IMAGE_COUNT = 248
 EXPECTED_ANNOTATION_COUNT_MIN = 20_000

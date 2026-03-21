@@ -264,9 +264,6 @@ def evaluate_checkpoint(checkpoint: Path, val_images: list[Path], coco_gt_full: 
     gt_image_ids = {img["id"] for img in coco_gt["images"]}
     print(f"  Val images matched in GT: {len(coco_gt['images'])}")
 
-    # Build a filename -> image_id map for matching predictions
-    filename_to_id = {Path(img["file_name"]).name: img["id"] for img in coco_gt["images"]}
-
     # Run inference
     t0 = time.time()
     raw_predictions = run_inference(checkpoint, val_images)
@@ -450,13 +447,15 @@ def already_evaluated(checkpoint: Path, history: list[dict]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def mode_one_shot(checkpoint: Path) -> None:
+def mode_one_shot(checkpoint: Path, max_images: int = 0) -> None:
     checkpoint = checkpoint.resolve()
     if not checkpoint.exists():
         print(f"ERROR: Checkpoint not found: {checkpoint}", file=sys.stderr)
         sys.exit(1)
 
     val_images = collect_val_images()
+    if max_images > 0:
+        val_images = val_images[:max_images]
     print(f"Validation images: {len(val_images)}")
 
     coco_gt_full = _load_coco_gt()
@@ -563,7 +562,8 @@ def mode_watch(poll_interval: int = 60) -> None:
                 continue
 
             # Find all best.pt and epochN.pt files in stage subdirs
-            found = sorted(checkpoint_dir.glob("*.pt"))
+            found = sorted(p for p in checkpoint_dir.glob("*.pt")
+                           if not p.name.startswith("classifier"))
             found += sorted(checkpoint_dir.glob("*/weights/best.pt"))
             new_checkpoints = [c for c in found if str(c.resolve()) not in evaluated_paths]
 
@@ -646,11 +646,18 @@ Examples:
         metavar="SECONDS",
         help="Polling interval for --watch mode (default: 60).",
     )
+    parser.add_argument(
+        "--max-images",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Limit evaluation to N val images (0 = all). For quick scoring.",
+    )
 
     args = parser.parse_args()
 
     if args.checkpoint:
-        mode_one_shot(args.checkpoint)
+        mode_one_shot(args.checkpoint, max_images=args.max_images)
     elif args.all:
         mode_all()
     elif args.watch:

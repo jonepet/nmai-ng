@@ -78,6 +78,28 @@ def export_one(name: str, source_pt: Path, submission_dir: Path) -> bool:
     return True
 
 
+def find_best_checkpoint(checkpoint_root: Path) -> Path | None:
+    """Find the best checkpoint: best_final.pt, or latest stage's best.pt."""
+    best_final = checkpoint_root / "best_final.pt"
+    if best_final.exists():
+        return best_final
+
+    # Find latest stage's best.pt
+    candidates = sorted(
+        checkpoint_root.glob("*/weights/best.pt"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        # Copy to best_final.pt so evaluate watcher picks it up
+        shutil.copy2(candidates[0], best_final)
+        stage = candidates[0].parent.parent.name
+        print(f"  Created best_final.pt from {stage}/weights/best.pt")
+        return best_final
+
+    return None
+
+
 def main() -> None:
     submission_dir = config.SUBMISSION_DIR
     submission_dir.mkdir(parents=True, exist_ok=True)
@@ -87,13 +109,21 @@ def main() -> None:
     print(f"ONNX opset: {config.ONNX_OPSET}")
     print(f"Image size: {config.IMGSZ}")
 
+    # Ensure best_final.pt exists
+    for onnx_name, checkpoint_name in config.SUBMISSION_CHECKPOINT_MAPPING.items():
+        pt_path = config.CHECKPOINT_ROOT / checkpoint_name
+        if not pt_path.exists() and checkpoint_name == "best_final.pt":
+            found = find_best_checkpoint(config.CHECKPOINT_ROOT)
+            if found:
+                print(f"  Resolved {checkpoint_name} from latest stage checkpoint")
+
     exported = 0
     total_bytes = 0
 
     for name, source_pt in WEIGHT_MAP.items():
         if export_one(name, source_pt, submission_dir):
             exported += 1
-            total_bytes += (submission_dir / f"{name}.onnx").stat().st_size
+            total_bytes += (submission_dir / name).stat().st_size
 
     if exported == 0:
         print("\nERROR: No models exported.", file=sys.stderr)

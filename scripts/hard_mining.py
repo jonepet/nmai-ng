@@ -82,7 +82,7 @@ def run_inference_on_training(model, images_dir, device="cpu"):
     print(f"  Running inference on {len(image_files)} training images...")
     for idx, img_path in enumerate(image_files):
         with torch.no_grad():
-            results = model(str(img_path), device=device, verbose=False, imgsz=640)
+            results = model(str(img_path), device=device, verbose=False, imgsz=config.IMGSZ)
 
         for result in results:
             if result.boxes is None or len(result.boxes) == 0:
@@ -132,14 +132,12 @@ def find_hard_examples(gt, predictions, fname_to_id):
         for gt_idx, gt_box in enumerate(gt_boxes):
             best_iou = 0
             best_pred = None
-            best_pred_idx = -1
 
-            for pred_idx, pred in enumerate(preds):
+            for pred in preds:
                 iou_val = iou(gt_box["bbox"], pred["bbox"])
                 if iou_val > best_iou:
                     best_iou = iou_val
                     best_pred = pred
-                    best_pred_idx = pred_idx
 
             if best_iou < iou_threshold:
                 missed += 1

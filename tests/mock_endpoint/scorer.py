@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-import config  # noqa: F401 — imported for consistency; weights match competition spec
-
 
 def _load_annotations(annotations_path: str) -> dict:
     with open(annotations_path) as f:

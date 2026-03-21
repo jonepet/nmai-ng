@@ -2,6 +2,7 @@
 # Uses ONNX format (recommended by competition docs) — no pickle, no version issues.
 """
 NorgesGruppen grocery product detection — ONNX inference.
+Two-stage: YOLO detects boxes, classifier identifies products.
 
 Sandbox: Python 3.11, onnxruntime-gpu 1.20.0, numpy 1.26.4, Pillow 10.2.0,
          ensemble-boxes 1.0.9, NVIDIA L4 GPU (24GB VRAM), 300s timeout.
@@ -34,6 +35,13 @@ IMGSZ = _cfg["imgsz"]
 CONF_THRESHOLD = _cfg["conf_threshold"]
 WBF_IOU_THRESHOLD = _cfg["wbf_iou_threshold"]
 WBF_SCORE_THRESHOLD = _cfg["wbf_score_threshold"]
+CLASSIFIER_FILE = _cfg.get("classifier_file")
+CLASSIFIER_INPUT_SIZE = _cfg.get("classifier_input_size", 128)
+CLASSIFIER_CONF_THRESHOLD = _cfg.get("classifier_confidence_threshold", 0.3)
+
+# ImageNet normalization for classifier
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +80,22 @@ def load_onnx_sessions(script_dir: Path) -> list[ort.InferenceSession]:
         raise FileNotFoundError(
             f"No ONNX models found in {script_dir}. Expected: {MODEL_FILES}"
         )
-    print(f"Loaded {len(sessions)} model(s), providers: {sessions[0].get_providers()}")
+    print(f"Loaded {len(sessions)} detector(s), providers: {sessions[0].get_providers()}")
     return sessions
+
+
+def load_classifier(script_dir: Path) -> ort.InferenceSession | None:
+    if not CLASSIFIER_FILE:
+        return None
+    path = script_dir / CLASSIFIER_FILE
+    if not path.exists():
+        print(f"Classifier not found: {path.name}, using YOLO classes only")
+        return None
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    print(f"Loading classifier: {path.name}")
+    sess = ort.InferenceSession(str(path), providers=providers)
+    print(f"Classifier loaded, providers: {sess.get_providers()}")
+    return sess
 
 
 # ---------------------------------------------------------------------------
@@ -101,16 +123,21 @@ def preprocess(img: Image.Image, imgsz: int) -> tuple[np.ndarray, float, int, in
     return arr, ratio, pad_w, pad_h, orig_w, orig_h
 
 
+def preprocess_crop(crop: Image.Image, size: int) -> np.ndarray:
+    """Preprocess a crop for the classifier (ImageNet normalization)."""
+    resized = crop.resize((size, size), Image.BILINEAR)
+    arr = np.array(resized, dtype=np.float32) / 255.0
+    arr = np.transpose(arr, (2, 0, 1))  # HWC -> CHW
+    arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
+    return arr
+
+
 # ---------------------------------------------------------------------------
 # Postprocessing — YOLOv8 ONNX output
 # ---------------------------------------------------------------------------
 
 def postprocess(output: np.ndarray, ratio: float, pad_w: int, pad_h: int,
                 orig_w: int, orig_h: int, conf_threshold: float) -> list[dict]:
-    """
-    YOLOv8 ONNX output shape: (1, 4+nc, num_boxes).
-    Transpose to (num_boxes, 4+nc). First 4 = cx, cy, w, h in input coords.
-    """
     preds = output[0].T  # (num_boxes, 4+nc)
 
     boxes_xywh = preds[:, :4]
@@ -128,13 +155,11 @@ def postprocess(output: np.ndarray, ratio: float, pad_w: int, pad_h: int,
     for i in range(len(boxes_xywh)):
         cx, cy, w, h = boxes_xywh[i]
 
-        # Remove letterbox padding and scale to original coords
         x1 = (cx - w / 2 - pad_w) / ratio
         y1 = (cy - h / 2 - pad_h) / ratio
         bw = w / ratio
         bh = h / ratio
 
-        # Clip to image bounds
         x1 = max(0, min(x1, orig_w))
         y1 = max(0, min(y1, orig_h))
         bw = min(bw, orig_w - x1)
@@ -149,6 +174,60 @@ def postprocess(output: np.ndarray, ratio: float, pad_w: int, pad_h: int,
             })
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Classifier reclassification
+# ---------------------------------------------------------------------------
+
+def reclassify_detections(
+    detections: list[dict],
+    img: Image.Image,
+    classifier: ort.InferenceSession,
+) -> list[dict]:
+    """Reclassify only low-confidence YOLO detections using the product classifier."""
+    if not detections:
+        return detections
+
+    # Only reclassify detections where YOLO is uncertain
+    indices_to_classify = []
+    crops = []
+    for i, det in enumerate(detections):
+        if det["score"] < CLASSIFIER_CONF_THRESHOLD:
+            x, y, w, h = det["bbox"]
+            if w > 2 and h > 2:  # skip tiny crops
+                crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
+                crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
+                indices_to_classify.append(i)
+
+    if not crops:
+        return detections
+
+    # Batch classify in chunks to limit memory
+    input_name = classifier.get_inputs()[0].name
+    BATCH = 64
+    all_logits = []
+    for start in range(0, len(crops), BATCH):
+        batch = np.stack(crops[start:start + BATCH], axis=0)
+        logits = classifier.run(None, {input_name: batch})[0]
+        all_logits.append(logits)
+    all_logits = np.concatenate(all_logits, axis=0)
+
+    for j, idx in enumerate(indices_to_classify):
+        probs = _softmax(all_logits[j])
+        cls_id = int(np.argmax(probs))
+        cls_conf = float(probs[cls_id])
+
+        if cls_conf > 0.5:  # only override if classifier is confident
+            detections[idx]["category_id"] = cls_id
+            detections[idx]["score"] = round(float(detections[idx]["score"]) * cls_conf, 3)
+
+    return detections
+
+
+def _softmax(x: np.ndarray) -> np.ndarray:
+    e = np.exp(x - np.max(x))
+    return e / e.sum()
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +266,7 @@ def run_single_pass(session: ort.InferenceSession, img: Image.Image,
 
 def run_ensemble_for_image(
     sessions: list[ort.InferenceSession],
+    classifier: ort.InferenceSession | None,
     image_path: Path,
 ) -> list[dict]:
     img = Image.open(image_path).convert("RGB")
@@ -208,7 +288,6 @@ def run_ensemble_for_image(
         return []
 
     if len(all_boxes) == 1:
-        # Single model — no WBF needed, just convert back
         fused_boxes = np.array(all_boxes[0])
         fused_scores = np.array(all_scores[0])
         fused_labels = np.array(all_labels[0])
@@ -231,11 +310,15 @@ def run_ensemble_for_image(
 
         predictions.append({
             "image_id": image_id,
-            "category_id": int(fused_labels[i]),
+            "category_id": int(round(fused_labels[i])),
             "bbox": [round(float(x1), 1), round(float(y1), 1),
                      round(float(w), 1), round(float(h), 1)],
             "score": round(float(fused_scores[i]), 3),
         })
+
+    # Reclassify with product classifier if available
+    if classifier and predictions:
+        predictions = reclassify_detections(predictions, img, classifier)
 
     return predictions
 
@@ -258,6 +341,7 @@ def main() -> None:
 
     script_dir = Path(__file__).parent
     sessions = load_onnx_sessions(script_dir)
+    classifier = load_classifier(script_dir)
 
     image_paths = collect_images(input_dir)
     print(f"Found {len(image_paths)} image(s)")
@@ -270,7 +354,7 @@ def main() -> None:
 
     all_predictions = []
     for idx, image_path in enumerate(image_paths):
-        preds = run_ensemble_for_image(sessions, image_path)
+        preds = run_ensemble_for_image(sessions, classifier, image_path)
         all_predictions.extend(preds)
         if (idx + 1) % 50 == 0 or idx == 0:
             print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions")

@@ -414,7 +414,7 @@ def _validate_predictions(predictions_path: Path) -> tuple[list[dict], list[str]
         if not isinstance(pred.get("image_id"), int):
             invalid.append(f"[{i}] image_id must be int")
         cat = pred.get("category_id")
-        if not isinstance(cat, int) or not (0 <= cat <= 356):
+        if not isinstance(cat, int) or not (0 <= cat <= config.NC - 1):
             invalid.append(f"[{i}] category_id must be int 0–355")
         bbox = pred.get("bbox")
         if not (isinstance(bbox, list) and len(bbox) == 4 and all(isinstance(v, (int, float)) for v in bbox)):
@@ -444,17 +444,6 @@ def _collect_images(images_dir: Path) -> list[Path]:
         if p.is_file() and p.suffix.lower() in extensions
     )
 
-
-def _build_filename_to_image_id(annotations_path: Path) -> dict[str, int]:
-    """Map filename stem (or full filename) → COCO image_id from annotations."""
-    with open(annotations_path) as f:
-        ann = json.load(f)
-    mapping: dict[str, int] = {}
-    for img in ann.get("images", []):
-        fname = Path(img["file_name"]).name
-        mapping[fname] = img["id"]
-        mapping[Path(fname).stem] = img["id"]
-    return mapping
 
 
 # ===========================================================================
