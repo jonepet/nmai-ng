@@ -1,0 +1,8 @@
+{
+  "model_files": ["best_main.onnx", "best_parallel.onnx"],
+  "imgsz": 640,
+  "conf_threshold": 0.25,
+  "wbf_iou_threshold": 0.55,
+  "wbf_score_threshold": 0.01,
+  "nc": 356
+}

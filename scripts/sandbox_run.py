@@ -414,7 +414,7 @@ def _validate_predictions(predictions_path: Path) -> tuple[list[dict], list[str]
         if not isinstance(pred.get("image_id"), int):
             invalid.append(f"[{i}] image_id must be int")
         cat = pred.get("category_id")
-        if not isinstance(cat, int) or not (0 <= cat <= 355):
+        if not isinstance(cat, int) or not (0 <= cat <= 356):
             invalid.append(f"[{i}] category_id must be int 0–355")
         bbox = pred.get("bbox")
         if not (isinstance(bbox, list) and len(bbox) == 4 and all(isinstance(v, (int, float)) for v in bbox)):

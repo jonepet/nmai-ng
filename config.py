@@ -56,9 +56,14 @@ SHM_SIZE = _env("SHM_SIZE", "4g")
 MODEL_PRIMARY = _env("MODEL_PRIMARY", "yolov8s.pt")
 MODEL_PARALLEL = _env("MODEL_PARALLEL", "yolov8n.pt")
 
-NC = 357                   # Number of categories (0-356 including unknown_product)
-IMGSZ = _env_int("IMGSZ", 640)
-IMGSZ_PARALLEL = IMGSZ
+# Load submission config (single source of truth for inference params)
+import json as _json
+_submission_cfg_path = PROJECT_ROOT / "submission" / "config.json"
+with open(_submission_cfg_path, encoding="utf-8") as _f:
+    _submission_cfg = _json.load(_f)
+
+NC = _submission_cfg["nc"]
+IMGSZ = _env_int("IMGSZ", _submission_cfg["imgsz"])
 
 # ---------------------------------------------------------------------------
 # Training
@@ -161,7 +166,7 @@ TRAIN_RATIO = 0.80
 RANDOM_SEED = 42
 EXPECTED_IMAGE_COUNT = 248
 EXPECTED_ANNOTATION_COUNT_MIN = 20_000
-EXPECTED_NUM_CATEGORIES = NC  # 357
+EXPECTED_NUM_CATEGORIES = NC
 
 # ---------------------------------------------------------------------------
 # Submission constraints (from competition docs)
@@ -204,19 +209,13 @@ BLOCKED_IMPORTS = {
 BLOCKED_CALLS = {"eval", "exec", "compile", "__import__"}
 
 # ---------------------------------------------------------------------------
-# Ensemble inference (submission)
+# Submission inference — read from submission/config.json
 # ---------------------------------------------------------------------------
 
-# Model weight filenames included in submission zip
-SUBMISSION_MODEL_FILES = ["best_main.onnx", "best_parallel.onnx"]
-
-# Inference scales — run each model at these image sizes, merge with WBF
-INFERENCE_SCALES = [640]  # Fixed — ONNX exported at 640
-
-# WBF (Weighted Box Fusion) parameters
-WBF_IOU_THRESHOLD = 0.55      # IoU threshold for merging overlapping boxes
-WBF_SCORE_THRESHOLD = 0.001   # Minimum score to keep a prediction
-WBF_SKIP_BOX_THRESHOLD = 0.0001  # Skip boxes below this score before WBF
+SUBMISSION_MODEL_FILES = _submission_cfg["model_files"]
+CONF_THRESHOLD = _submission_cfg["conf_threshold"]
+WBF_IOU_THRESHOLD = _submission_cfg["wbf_iou_threshold"]
+WBF_SCORE_THRESHOLD = _submission_cfg["wbf_score_threshold"]
 
 # ---------------------------------------------------------------------------
 # ONNX export
