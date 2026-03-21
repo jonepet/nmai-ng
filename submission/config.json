@@ -8,6 +8,6 @@
   "conf_threshold": 0.25,
   "wbf_iou_threshold": 0.55,
   "wbf_score_threshold": 0.01,
-  "nc": 356,
+  "nc": 357,
   "onnx_opset": 17
 }

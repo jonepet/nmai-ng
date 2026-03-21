@@ -460,7 +460,11 @@ def write_dataset_yaml(coco: dict) -> None:
 
     categories = sorted(coco.get("categories", []), key=lambda c: c["id"])
     names = [cat["name"] for cat in categories]
-    nc = len(names)
+    # Docs specify nc=357 (ids 0-356 with 356=unknown_product)
+    # If data only has 356 categories (0-355), add the missing unknown_product
+    if len(names) == 356:
+        names.append("unknown_product")
+    nc = config.NC  # from submission/config.json
 
     yaml_lines = [
         f"# NorgesGruppen COCO -> YOLOv8 dataset",
