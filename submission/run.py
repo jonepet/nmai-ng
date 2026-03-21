@@ -359,6 +359,13 @@ def main() -> None:
         if (idx + 1) % 50 == 0 or idx == 0:
             print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions")
 
+    # Hard cap at 49000 predictions to stay under competition limit of 50000
+    MAX_PREDICTIONS = 49000
+    if len(all_predictions) > MAX_PREDICTIONS:
+        all_predictions.sort(key=lambda p: p["score"], reverse=True)
+        all_predictions = all_predictions[:MAX_PREDICTIONS]
+        print(f"Capped to {MAX_PREDICTIONS} predictions (sorted by score)")
+
     print(f"Total: {len(all_predictions)} predictions")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -34,8 +34,8 @@ torch.load = _patched_torch_load
 PRODUCT_IMAGES_DIR = config.PRODUCT_EXTRACT_DIR
 CLASSIFIER_CHECKPOINT = config.CHECKPOINT_ROOT / "classifier_best.pt"
 CLASSIFIER_ONNX = config.SUBMISSION_DIR / "classifier.onnx"
-INPUT_SIZE = 128  # Small input for fast inference
-BATCH_SIZE = 32
+INPUT_SIZE = 224  # EfficientNet-B0 native input size
+BATCH_SIZE = 8
 EPOCHS = 50
 LR = 0.001
 
@@ -191,9 +191,9 @@ def train_classifier(device: str = "cpu"):
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False,
                             num_workers=2, pin_memory=(device != "cpu"))
 
-    # Model: MobileNetV3-Small — tiny, fast, good accuracy
-    print(f"\nBuilding MobileNetV3-Small classifier ({num_classes} classes)...")
-    model = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
+    # Model: EfficientNet-B0 — good accuracy/size tradeoff
+    print(f"\nBuilding EfficientNet-B0 classifier ({num_classes} classes)...")
+    model = models.efficientnet_b0(weights="IMAGENET1K_V1")
     model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
     model = model.to(device)
 

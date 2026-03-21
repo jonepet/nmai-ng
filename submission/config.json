@@ -1,12 +1,12 @@
 {
   "model_files": ["best_main.onnx"],
   "classifier_file": "classifier.onnx",
-  "classifier_input_size": 128,
+  "classifier_input_size": 224,
   "checkpoint_mapping": {
     "best_main.onnx": "best_final.pt"
   },
   "imgsz": 640,
-  "conf_threshold": 0.001,
+  "conf_threshold": 0.05,
   "wbf_iou_threshold": 0.55,
   "wbf_score_threshold": 0.01,
   "nc": 357,

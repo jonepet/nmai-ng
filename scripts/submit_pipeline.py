@@ -71,7 +71,7 @@ def step_export():
         num_classes = ckpt["num_classes"]
         input_size = ckpt["input_size"]
 
-        clf_model = tv_models.mobilenet_v3_small()
+        clf_model = tv_models.efficientnet_b0()
         clf_model.classifier[-1] = nn.Linear(clf_model.classifier[-1].in_features, num_classes)
         clf_model.load_state_dict(ckpt["model_state_dict"])
         clf_model.eval()
