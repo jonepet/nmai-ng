@@ -208,7 +208,7 @@ BLOCKED_CALLS = {"eval", "exec", "compile", "__import__"}
 # ---------------------------------------------------------------------------
 
 # Model weight filenames included in submission zip
-SUBMISSION_MODEL_FILES = ["best_main.pt", "best_parallel.pt"]
+SUBMISSION_MODEL_FILES = ["best_main.onnx", "best_parallel.onnx"]
 
 # Inference scales — run each model at these image sizes, merge with WBF
 INFERENCE_SCALES = [640, 1280]

@@ -30,8 +30,8 @@ EXCLUDE_PATTERNS = {"__pycache__", ".pyc", "__MACOSX", ".DS_Store"}
 
 # Weight source mapping: submission zip name -> path in submission dir (placed by export script)
 WEIGHT_SOURCES = {
-    "best_main.pt": SUBMISSION_DIR / "best_main.pt",
-    "best_parallel.pt": SUBMISSION_DIR / "best_parallel.pt",
+    "best_main.onnx": SUBMISSION_DIR / "best_main.onnx",
+    "best_parallel.onnx": SUBMISSION_DIR / "best_parallel.onnx",
 }
 
 

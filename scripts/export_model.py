@@ -1,8 +1,11 @@
 """
-Export trained models for NorgesGruppen competition submission.
+Export trained models to ONNX format for submission.
 
-Copies both main and parallel model weights to submission/ directory
-with the filenames expected by run.py's ensemble inference.
+ONNX is the recommended format per competition docs:
+- Universal, no pickle issues
+- Works with onnxruntime-gpu (pre-installed in sandbox)
+- Use CUDAExecutionProvider for GPU acceleration
+- opset ≤ 20 (we use 17)
 """
 
 import shutil
@@ -13,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 
 import torch
-# PyTorch 2.6 compat: ultralytics 8.1.0 needs weights_only=False
 _original_torch_load = torch.load
 def _patched_torch_load(*args, **kwargs):
     kwargs.setdefault("weights_only", False)
@@ -27,85 +29,93 @@ def get_file_size_mb(path: Path) -> float:
     return path.stat().st_size / (1024 * 1024)
 
 
-def format_size(size_bytes: int) -> str:
-    mb = size_bytes / (1024 * 1024)
-    return f"{mb:.1f} MB"
-
-
-# Weight source mapping: zip name -> checkpoint path
 WEIGHT_MAP = {
-    "best_main.pt": config.CHECKPOINT_ROOT / "best_final.pt",
-    "best_parallel.pt": config.CHECKPOINT_ROOT / "best_parallel_gpu0.pt",
+    "best_main": config.CHECKPOINT_ROOT / "best_final.pt",
+    "best_parallel": config.CHECKPOINT_ROOT / "best_parallel_gpu0.pt",
 }
 
-MAX_TOTAL_MB = config.SUBMISSION_MAX_WEIGHT_SIZE_MB  # 420 MB
 
+def export_one(name: str, source_pt: Path, submission_dir: Path) -> bool:
+    """Export a single .pt checkpoint to .onnx in submission dir."""
+    if not source_pt.exists():
+        print(f"  {source_pt} not found — skipping {name}")
+        return False
 
-def _find_sample_image() -> Path | None:
-    for root in [config.DATA_DIR, Path("/workspace/data")]:
-        if not root.exists():
-            continue
-        for ext in ("*.jpg", "*.jpeg"):
-            candidates = sorted(root.rglob(ext))
-            if candidates:
-                return candidates[0]
-    return None
+    print(f"\n  Exporting {name}: {source_pt} ({get_file_size_mb(source_pt):.1f} MB)")
+
+    model = YOLO(str(source_pt))
+    onnx_path = Path(model.export(
+        format="onnx",
+        imgsz=config.IMGSZ,
+        opset=config.ONNX_OPSET,
+        simplify=True,
+        dynamic=False,
+    ))
+
+    dest = submission_dir / f"{name}.onnx"
+    shutil.copy2(onnx_path, dest)
+
+    size_mb = get_file_size_mb(dest)
+    print(f"  -> {dest.name} ({size_mb:.1f} MB)")
+
+    if size_mb > config.SUBMISSION_MAX_WEIGHT_SIZE_MB:
+        print(f"  WARNING: {size_mb:.1f} MB exceeds {config.SUBMISSION_MAX_WEIGHT_SIZE_MB} MB limit")
+        # Try FP16
+        print(f"  Retrying with FP16...")
+        onnx_path = Path(model.export(
+            format="onnx",
+            imgsz=config.IMGSZ,
+            opset=config.ONNX_OPSET,
+            simplify=True,
+            dynamic=False,
+            half=True,
+        ))
+        shutil.copy2(onnx_path, dest)
+        size_mb = get_file_size_mb(dest)
+        print(f"  -> {dest.name} FP16 ({size_mb:.1f} MB)")
+
+    return True
 
 
 def main() -> None:
     submission_dir = config.SUBMISSION_DIR
     submission_dir.mkdir(parents=True, exist_ok=True)
 
-    print("NorgesGruppen model export for ensemble submission")
+    print("NorgesGruppen model export to ONNX")
     print(f"Submission dir: {submission_dir}")
-    print(f"Max total weight size: {MAX_TOTAL_MB} MB")
-    print()
+    print(f"ONNX opset: {config.ONNX_OPSET}")
+    print(f"Image size: {config.IMGSZ}")
 
-    # Copy each available weight file
-    copied = []
+    exported = 0
     total_bytes = 0
 
-    for zip_name, source_path in WEIGHT_MAP.items():
-        dest = submission_dir / zip_name
-        if source_path.exists():
-            size = source_path.stat().st_size
-            size_mb = size / (1024 * 1024)
-            print(f"  {source_path.name} -> {zip_name}  ({size_mb:.1f} MB)")
+    for name, source_pt in WEIGHT_MAP.items():
+        if export_one(name, source_pt, submission_dir):
+            exported += 1
+            total_bytes += (submission_dir / f"{name}.onnx").stat().st_size
 
-            # Verify model loads correctly
-            try:
-                model = YOLO(str(source_path))
-                print(f"    Model loaded OK: {model.model.__class__.__name__}")
-            except Exception as exc:
-                print(f"    WARNING: Failed to load {source_path}: {exc}")
-                continue
-
-            shutil.copy2(source_path, dest)
-            copied.append((zip_name, size))
-            total_bytes += size
-        else:
-            print(f"  {source_path} not found — skipping {zip_name}")
-
-    if not copied:
-        print("\nERROR: No weight files found to export.", file=sys.stderr)
+    if exported == 0:
+        print("\nERROR: No models exported.", file=sys.stderr)
         sys.exit(1)
 
     total_mb = total_bytes / (1024 * 1024)
-    print(f"\nExported {len(copied)} model(s), total: {total_mb:.1f} MB")
+    print(f"\nExported {exported} model(s), total: {total_mb:.1f} MB")
+    print(f"Size check: {total_mb:.1f} / {config.SUBMISSION_MAX_WEIGHT_SIZE_MB} MB ({total_mb/config.SUBMISSION_MAX_WEIGHT_SIZE_MB*100:.0f}% used)")
 
-    if total_mb > MAX_TOTAL_MB:
-        print(f"WARNING: Total {total_mb:.1f} MB exceeds {MAX_TOTAL_MB} MB limit!")
-    else:
-        print(f"Size check passed: {total_mb:.1f} / {MAX_TOTAL_MB} MB ({total_mb/MAX_TOTAL_MB*100:.0f}% used)")
-
-    # Verify inference with a sample image
-    sample = _find_sample_image()
-    if sample and copied:
-        print(f"\nVerifying inference with {sample.name}...")
-        test_model = YOLO(str(submission_dir / copied[0][0]))
-        results = test_model(str(sample), verbose=False)
-        n_det = sum(len(r.boxes) for r in results if r.boxes is not None)
-        print(f"  {n_det} detection(s) — inference OK")
+    # Verify with onnxruntime
+    import onnxruntime as ort
+    import numpy as np
+    first_onnx = submission_dir / f"{list(WEIGHT_MAP.keys())[0]}.onnx"
+    if first_onnx.exists():
+        print(f"\nVerifying {first_onnx.name} with onnxruntime...")
+        sess = ort.InferenceSession(str(first_onnx), providers=["CPUExecutionProvider"])
+        inp = sess.get_inputs()[0]
+        print(f"  Input: {inp.name} shape={inp.shape} type={inp.type}")
+        for out in sess.get_outputs():
+            print(f"  Output: {out.name} shape={out.shape} type={out.type}")
+        dummy = np.random.randn(*[d if isinstance(d, int) else 1 for d in inp.shape]).astype(np.float32)
+        results = sess.run(None, {inp.name: dummy})
+        print(f"  Inference OK — output shape: {results[0].shape}")
 
     print("\nExport complete.")
 
