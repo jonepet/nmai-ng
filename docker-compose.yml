@@ -8,10 +8,10 @@ services:
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
     runtime: nvidia
+    env_file: .env.local
     environment:
-      - NVIDIA_VISIBLE_DEVICES=1
       - CUDA_VISIBLE_DEVICES=0
-    shm_size: 4g
+    shm_size: ${SHM_SIZE:-4g}
     command: python scripts/train.py
 
   train-parallel:
@@ -23,11 +23,13 @@ services:
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
     runtime: nvidia
+    env_file: .env.local
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=0
-    shm_size: 1g
+    shm_size: ${SHM_SIZE:-4g}
     command: python scripts/train_parallel.py
+    profiles:
+      - dual-gpu
 
   evaluate:
     build:
@@ -59,8 +61,8 @@ services:
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
     runtime: nvidia
+    env_file: .env.local
     environment:
-      - NVIDIA_VISIBLE_DEVICES=1
       - CUDA_VISIBLE_DEVICES=0
     command: python scripts/compute_embeddings.py
 
@@ -73,8 +75,8 @@ services:
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
     runtime: nvidia
+    env_file: .env.local
     environment:
-      - NVIDIA_VISIBLE_DEVICES=1
       - CUDA_VISIBLE_DEVICES=0
     command: python scripts/hard_mining.py
 

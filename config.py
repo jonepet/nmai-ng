@@ -2,9 +2,20 @@
 Centralized configuration for NorgesGruppen object detection project.
 
 ALL parameters and settings live here. No magic numbers in other files.
+Hardware-specific settings (GPU, model, batch sizes) are read from
+environment variables, set via .env.local (not in git).
 """
 
+import os
 from pathlib import Path
+
+
+def _env(key: str, default: str) -> str:
+    return os.environ.get(key, default)
+
+
+def _env_int(key: str, default: int) -> int:
+    return int(os.environ.get(key, str(default)))
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -28,40 +39,32 @@ CHECKPOINT_ROOT = Path("/workspace/checkpoints")
 SUBMISSION_DIR = PROJECT_ROOT / "submission"
 
 # ---------------------------------------------------------------------------
-# Remote machine — IPs are in .env.local (not tracked by git)
+# Hardware — read from .env.local via environment variables
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Hardware (remote training machine)
-# ---------------------------------------------------------------------------
-
-GPU_PRIMARY = "0"          # GTX 1050 Ti (4GB VRAM, dedicated) — maps to CUDA:0 inside Docker
-GPU_SECONDARY = "1"        # GTX 960 (2GB VRAM, runs desktop) — maps to CUDA:1 inside Docker
-GPU_PRIMARY_VRAM_GB = 4
-GPU_SECONDARY_VRAM_GB = 2
-CPU_CORES = 16
-RAM_GB = 30
-SHM_SIZE = "4g"
+GPU_PRIMARY = _env("GPU_PRIMARY", "0")
+GPU_SECONDARY = _env("GPU_SECONDARY", "") or None
+GPU_PRIMARY_VRAM_GB = _env_int("GPU_PRIMARY_VRAM_GB", 4)
+CPU_CORES = _env_int("CPU_CORES", 16)
+RAM_GB = _env_int("RAM_GB", 30)
+SHM_SIZE = _env("SHM_SIZE", "4g")
 
 # ---------------------------------------------------------------------------
-# Model
+# Model — read from .env.local
 # ---------------------------------------------------------------------------
 
-# Primary model: YOLOv8s — best balance for 4GB GPU training
-# Submission runs on L4 24GB so inference is unconstrained
-MODEL_PRIMARY = "yolov8s.pt"
-# Parallel GPU0 model: YOLOv8n — fits in 2GB VRAM
-MODEL_PARALLEL = "yolov8n.pt"
+MODEL_PRIMARY = _env("MODEL_PRIMARY", "yolov8s.pt")
+MODEL_PARALLEL = _env("MODEL_PARALLEL", "yolov8n.pt")
 
 NC = 357                   # Number of categories (0-356 including unknown_product)
-IMGSZ = 640                # Training and inference image size
-IMGSZ_PARALLEL = 640       # Parallel GPU0 image size (same to maximize quality)
+IMGSZ = _env_int("IMGSZ", 640)
+IMGSZ_PARALLEL = IMGSZ
 
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
-WORKERS = 8                # DataLoader workers per training job
+WORKERS = _env_int("WORKERS", 8)
 PATIENCE = 10              # Early stopping patience (epochs without improvement)
 SAVE_PERIOD = 5            # Save checkpoint every N epochs
 COS_LR = True              # Cosine annealing learning rate
@@ -75,17 +78,22 @@ ADAPTIVE_LR_HIGH_LOSS = 2.0  # If val loss > this, keep lr unchanged
 HARD_MINING_ROUNDS = 2       # Number of mine→retrain cycles after initial stages
 
 # Stage configurations
+_BATCH_S1 = _env_int("BATCH_STAGE1", 8)
+_BATCH_S2 = _env_int("BATCH_STAGE2", 4)
+_BATCH_S3 = _env_int("BATCH_STAGE3", 4)
+_BATCH_PAR = _env_int("BATCH_PARALLEL", 4)
+
 TRAINING_STAGES = [
     {
         "name": "warmup",
         "stage_num": 1,
-        "model": MODEL_PRIMARY,       # YOLOv8s pretrained
+        "model": MODEL_PRIMARY,
         "epochs": 30,
         "lr0": 0.01,
-        "batch": 8,                   # Fits in 4GB with AMP
+        "batch": _BATCH_S1,
         "imgsz": IMGSZ,
         "device": GPU_PRIMARY,
-        "freeze": 10,                 # Freeze backbone layers
+        "freeze": 10,
         "pretrained": True,
         "hsv_h": 0.015, "hsv_s": 0.7, "hsv_v": 0.4,
         "degrees": 5.0, "translate": 0.1, "scale": 0.5,
@@ -95,10 +103,10 @@ TRAINING_STAGES = [
     {
         "name": "finetune",
         "stage_num": 2,
-        "model": None,                # Loaded from Stage 1 best
+        "model": None,
         "epochs": 50,
         "lr0": 0.001,
-        "batch": 4,                   # Reduced for unfrozen model
+        "batch": _BATCH_S2,
         "imgsz": IMGSZ,
         "device": GPU_PRIMARY,
         "freeze": 0,
@@ -111,10 +119,10 @@ TRAINING_STAGES = [
     {
         "name": "polish",
         "stage_num": 3,
-        "model": None,                # Loaded from Stage 2 best
+        "model": None,
         "epochs": 20,
         "lr0": 0.0001,
-        "batch": 4,
+        "batch": _BATCH_S3,
         "imgsz": IMGSZ,
         "device": GPU_PRIMARY,
         "freeze": 0,
@@ -126,20 +134,19 @@ TRAINING_STAGES = [
     },
 ]
 
-# Parallel GPU0 config (diversity training on GTX 960 2GB, runs concurrently)
-# YOLOv8n at batch=1 imgsz=480 uses ~1.2GB VRAM — fits in 2GB with room to spare
+# Parallel training — diversity model, runs in separate container
 PARALLEL_GPU0_CONFIG = {
     "name": "parallel_gpu0",
     "stage_num": 0,
-    "model": MODEL_PARALLEL,          # YOLOv8n — 3.4M params, ~6MB
+    "model": MODEL_PARALLEL,
     "epochs": 80,
     "lr0": 0.005,
-    "batch": 1,                       # Minimal batch for 2GB VRAM
-    "imgsz": 480,                     # Reduced from 640 to fit in 2GB
-    "device": GPU_SECONDARY,          # GTX 960 (2GB)
+    "batch": _BATCH_PAR,
+    "imgsz": IMGSZ,
+    "device": "0",  # Always CUDA:0 — container sees only its own GPU
     "freeze": 0,
     "pretrained": True,
-    "workers": 4,                     # Share CPU cores with main job
+    "workers": max(4, WORKERS // 2),
     "hsv_h": 0.02, "hsv_s": 0.8, "hsv_v": 0.5,
     "degrees": 10.0, "translate": 0.15, "scale": 0.6,
     "flipud": 0.01, "fliplr": 0.5,
