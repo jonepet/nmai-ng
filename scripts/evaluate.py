@@ -521,6 +521,29 @@ def mode_all() -> None:
             print(f"  {name:<40} {r['detection_map']:>7.4f} {r['classification_map']:>7.4f} {r['score']:>7.4f}")
 
 
+def _update_best_final(checkpoint_dir: Path) -> None:
+    """Copy the most recently modified best.pt from any stage to best_final.pt."""
+    import shutil
+    best_candidates = sorted(
+        checkpoint_dir.glob("*/weights/best.pt"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not best_candidates:
+        return
+
+    latest = best_candidates[0]
+    dest = checkpoint_dir / "best_final.pt"
+
+    # Only copy if source is newer
+    if dest.exists() and dest.stat().st_mtime >= latest.stat().st_mtime:
+        return
+
+    shutil.copy2(latest, dest)
+    stage_name = latest.parent.parent.name
+    print(f"  [{_now()}] Updated best_final.pt from {stage_name} ({latest.stat().st_size / 1024 / 1024:.1f} MB)")
+
+
 def mode_watch(poll_interval: int = 60) -> None:
     checkpoint_dir = config.CHECKPOINT_ROOT
     print(f"Watching {checkpoint_dir} for new .pt files (polling every {poll_interval}s)")
@@ -539,8 +562,13 @@ def mode_watch(poll_interval: int = 60) -> None:
                 time.sleep(poll_interval)
                 continue
 
+            # Find all best.pt and epochN.pt files in stage subdirs
             found = sorted(checkpoint_dir.glob("*.pt"))
+            found += sorted(checkpoint_dir.glob("*/weights/best.pt"))
             new_checkpoints = [c for c in found if str(c.resolve()) not in evaluated_paths]
+
+            # Always update best_final.pt from the latest stage's best.pt
+            _update_best_final(checkpoint_dir)
 
             if new_checkpoints:
                 # Lazy-load val data once
