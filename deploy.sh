@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_HOST="192.168.10.118"
-REMOTE_DIR="~/nmai-ng"
+source "$(dirname "$0")/bin/env.sh"
 REMOTE="$REMOTE_HOST:$REMOTE_DIR"
 
 BUILD=false

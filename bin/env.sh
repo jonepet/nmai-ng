@@ -2,9 +2,17 @@
 # Single source of truth for shell script configuration.
 # All bin/*.sh scripts source this file.
 
-REMOTE_HOST="192.168.10.118"
-REMOTE_DIR="~/nmai-ng"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load local config (IP addresses, not in git)
+ENV_LOCAL="$PROJECT_DIR/.env.local"
+if [ ! -f "$ENV_LOCAL" ]; then
+  echo "ERROR: $ENV_LOCAL not found. Create it with:" >&2
+  echo "  REMOTE_HOST=<ip>" >&2
+  echo "  REMOTE_DIR=~/nmai-ng" >&2
+  exit 1
+fi
+source "$ENV_LOCAL"
 
 RSYNC_EXCLUDES=(
   --exclude 'data/coco_dataset/'
@@ -15,6 +23,7 @@ RSYNC_EXCLUDES=(
   --exclude '__pycache__/'
   --exclude '.git/'
   --exclude '*.zip'
+  --exclude '.env.local'
 )
 
 ZIP_FILES=(

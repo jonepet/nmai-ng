@@ -28,11 +28,8 @@ CHECKPOINT_ROOT = Path("/workspace/checkpoints")
 SUBMISSION_DIR = PROJECT_ROOT / "submission"
 
 # ---------------------------------------------------------------------------
-# Remote machine
+# Remote machine — IPs are in .env.local (not tracked by git)
 # ---------------------------------------------------------------------------
-
-REMOTE_HOST = "192.168.10.118"
-REMOTE_DEPLOY_DIR = "~/nmai-ng"
 
 # ---------------------------------------------------------------------------
 # Hardware (remote training machine)
