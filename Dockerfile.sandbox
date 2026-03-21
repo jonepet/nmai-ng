@@ -28,6 +28,15 @@ RUN pip install --no-cache-dir \
     safetensors==0.4.2
 
 # ---------------------------------------------------------------------------
+# Fix ultralytics torch.load compatibility with PyTorch 2.6
+# The real competition sandbox has this working — replicate by patching
+# the torch_safe_load function to pass weights_only=False
+# This is done at the Docker image level, not in user code
+# ---------------------------------------------------------------------------
+RUN sed -i 's/return torch.load(file, map_location="cpu"), file/return torch.load(file, map_location="cpu", weights_only=False), file/g' \
+    /opt/conda/lib/python3.11/site-packages/ultralytics/nn/tasks.py
+
+# ---------------------------------------------------------------------------
 # Lock down — match competition sandbox restrictions
 # ---------------------------------------------------------------------------
 
