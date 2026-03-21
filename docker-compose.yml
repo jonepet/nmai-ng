@@ -14,7 +14,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: .env.local
+    env_file: .env
     environment:
       - CUDA_VISIBLE_DEVICES=0
     shm_size: ${SHM_SIZE}
@@ -35,7 +35,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: .env.local
+    env_file: .env
     environment:
       - CUDA_VISIBLE_DEVICES=0
     shm_size: ${SHM_SIZE}
@@ -79,7 +79,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: .env.local
+    env_file: .env
     environment:
       - CUDA_VISIBLE_DEVICES=0
     command: python scripts/compute_embeddings.py
@@ -99,7 +99,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: .env.local
+    env_file: .env
     environment:
       - CUDA_VISIBLE_DEVICES=0
     command: python scripts/hard_mining.py

@@ -5,7 +5,7 @@
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Load local config (IP addresses, not in git)
-ENV_LOCAL="$PROJECT_DIR/.env.local"
+ENV_LOCAL="$PROJECT_DIR/.env"
 if [ ! -f "$ENV_LOCAL" ]; then
   echo "ERROR: $ENV_LOCAL not found. Create it with:" >&2
   echo "  REMOTE_HOST=<ip>" >&2
@@ -23,7 +23,6 @@ RSYNC_EXCLUDES=(
   --exclude '__pycache__/'
   --exclude '.git/'
   --exclude '*.zip'
-  --exclude '.env.local'
 )
 
 ZIP_FILES=(

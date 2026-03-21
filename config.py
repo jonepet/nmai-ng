@@ -3,7 +3,7 @@ Centralized configuration for NorgesGruppen object detection project.
 
 ALL parameters and settings live here. No magic numbers in other files.
 Hardware-specific settings (GPU, model, batch sizes) are read from
-environment variables, set via .env.local (not in git).
+environment variables, set via .env (not in git).
 """
 
 import os
@@ -39,7 +39,7 @@ CHECKPOINT_ROOT = Path("/workspace/checkpoints")
 SUBMISSION_DIR = PROJECT_ROOT / "submission"
 
 # ---------------------------------------------------------------------------
-# Hardware — read from .env.local via environment variables
+# Hardware — read from .env via environment variables
 # ---------------------------------------------------------------------------
 
 GPU_PRIMARY = _env("GPU_PRIMARY", "0")
@@ -50,7 +50,7 @@ RAM_GB = _env_int("RAM_GB", 30)
 SHM_SIZE = _env("SHM_SIZE", "4g")
 
 # ---------------------------------------------------------------------------
-# Model — read from .env.local
+# Model — read from .env
 # ---------------------------------------------------------------------------
 
 MODEL_PRIMARY = _env("MODEL_PRIMARY", "yolov8s.pt")

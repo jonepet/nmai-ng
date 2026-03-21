@@ -18,8 +18,8 @@ overview.txt
 submission.txt
 examples.txt
 
-# Local config (contains IP addresses)
-.env.local
+# Local config (contains IP addresses, hardware specs)
+.env
 
 # Python
 __pycache__/
