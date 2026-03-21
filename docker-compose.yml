@@ -7,11 +7,17 @@ services:
       - ./:/workspace/project
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     env_file: .env.local
     environment:
       - CUDA_VISIBLE_DEVICES=0
-    shm_size: ${SHM_SIZE:-4g}
+    shm_size: ${SHM_SIZE}
     command: python scripts/train.py
 
   train-parallel:
@@ -22,11 +28,17 @@ services:
       - ./:/workspace/project
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     env_file: .env.local
     environment:
       - CUDA_VISIBLE_DEVICES=0
-    shm_size: ${SHM_SIZE:-4g}
+    shm_size: ${SHM_SIZE}
     command: python scripts/train_parallel.py
     profiles:
       - dual-gpu
@@ -60,7 +72,13 @@ services:
       - ./:/workspace/project
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     env_file: .env.local
     environment:
       - CUDA_VISIBLE_DEVICES=0
@@ -74,7 +92,13 @@ services:
       - ./:/workspace/project
       - ./checkpoints:/workspace/checkpoints
     working_dir: /workspace/project
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     env_file: .env.local
     environment:
       - CUDA_VISIBLE_DEVICES=0

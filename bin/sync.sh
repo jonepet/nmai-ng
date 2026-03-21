@@ -14,4 +14,9 @@ for zip in "${ZIP_FILES[@]}"; do
   fi
 done
 
+# Sync .env.local (not in rsync since it's gitignored)
+if [ -f "$PROJECT_DIR/.env.local" ]; then
+  scp -q "$PROJECT_DIR/.env.local" "$REMOTE_HOST:$REMOTE_DIR/.env.local"
+fi
+
 echo "==> Sync complete."
