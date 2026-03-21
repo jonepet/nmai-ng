@@ -377,7 +377,115 @@ def main() -> None:
                 current_lr_override = adjusted
 
     # -----------------------------------------------------------------------
-    # Determine final best model from main stages
+    # Hard mining rounds: mine failures → augment → retrain
+    # -----------------------------------------------------------------------
+    for hm_round in range(1, config.HARD_MINING_ROUNDS + 1):
+        print(f"\n{'='*60}")
+        print(f"[train] HARD MINING ROUND {hm_round}/{config.HARD_MINING_ROUNDS}")
+        print(f"{'='*60}")
+
+        # Run hard_mining.py as subprocess (separate import scope)
+        import subprocess as sp
+        hm_script = Path(__file__).resolve().parent / "hard_mining.py"
+        if not hm_script.exists():
+            print(f"[train] hard_mining.py not found — skipping")
+            break
+
+        hm_result = sp.run(
+            [sys.executable, str(hm_script)],
+            capture_output=False,
+        )
+        if hm_result.returncode != 0:
+            print(f"[train] Hard mining failed (exit {hm_result.returncode}) — skipping retrain")
+            break
+
+        # Retrain: stages 2+3 only (fine-tune + polish on enriched data)
+        # Start from best checkpoint so far
+        print(f"\n[train] Retraining with hard examples (round {hm_round})...")
+        retrain_stages = [
+            {
+                "name": f"retrain_r{hm_round}_finetune",
+                "stage_num": 100 + hm_round * 10 + 1,
+                "model": None,  # will be set to best_final.pt below
+                "epochs": 30,
+                "lr0": 0.0005,
+                "batch": 4,
+                "imgsz": config.IMGSZ,
+                "device": config.GPU_PRIMARY,
+                "freeze": 0,
+                "pretrained": False,
+                "hsv_h": 0.015, "hsv_s": 0.7, "hsv_v": 0.4,
+                "degrees": 5.0, "translate": 0.1, "scale": 0.5,
+                "flipud": 0.0, "fliplr": 0.5,
+                "mosaic": 1.0, "mixup": 0.1,
+            },
+            {
+                "name": f"retrain_r{hm_round}_polish",
+                "stage_num": 100 + hm_round * 10 + 2,
+                "model": None,  # loaded from previous retrain stage
+                "epochs": 15,
+                "lr0": 0.0001,
+                "batch": 4,
+                "imgsz": config.IMGSZ,
+                "device": config.GPU_PRIMARY,
+                "freeze": 0,
+                "pretrained": False,
+                "hsv_h": 0.005, "hsv_s": 0.3, "hsv_v": 0.2,
+                "degrees": 0.0, "translate": 0.05, "scale": 0.2,
+                "flipud": 0.0, "fliplr": 0.5,
+                "mosaic": 0.5, "mixup": 0.0,
+            },
+        ]
+
+        # Set first retrain stage to load from current best
+        best_so_far = config.CHECKPOINT_ROOT / "best_final.pt"
+        if best_so_far.exists():
+            retrain_stages[0]["model"] = str(best_so_far)
+        else:
+            print(f"[train] No best_final.pt — skipping retrain round {hm_round}")
+            break
+
+        for j, rt_cfg in enumerate(retrain_stages):
+            if j > 0:
+                # Load from previous retrain stage
+                prev_sn = retrain_stages[j - 1]["stage_num"]
+                prev_best = config.CHECKPOINT_ROOT / f"best_stage_{prev_sn}.pt"
+                if prev_best.exists():
+                    rt_cfg["model"] = str(prev_best)
+                else:
+                    rt_cfg["model"] = str(best_so_far)
+
+            clear_cuda_cache()
+            success, val_loss = run_stage(rt_cfg, data_yaml)
+
+            if success and val_loss is not None:
+                stage_val_losses[rt_cfg["stage_num"]] = val_loss
+
+        # Update best_final.pt if retrain improved
+        retrain_candidates = []
+        for rt_cfg in retrain_stages:
+            pt = config.CHECKPOINT_ROOT / f"best_stage_{rt_cfg['stage_num']}.pt"
+            if pt.exists():
+                loss = stage_val_losses.get(rt_cfg["stage_num"])
+                if loss is not None:
+                    retrain_candidates.append((loss, pt, rt_cfg["name"]))
+
+        if retrain_candidates:
+            retrain_candidates.sort()
+            best_loss, best_pt, best_name = retrain_candidates[0]
+            # Compare with current best
+            current_best_loss = min(
+                (v for k, v in stage_val_losses.items() if k < 100),
+                default=float("inf")
+            )
+            if best_loss < current_best_loss:
+                shutil.copy2(best_pt, config.CHECKPOINT_ROOT / "best_final.pt")
+                print(f"[train] Round {hm_round} improved! {best_name} val_loss={best_loss:.4f} (was {current_best_loss:.4f})")
+            else:
+                print(f"[train] Round {hm_round} did not improve ({best_loss:.4f} >= {current_best_loss:.4f})")
+
+    # -----------------------------------------------------------------------
+    # Determine final best model from all stages
     # (parallel GPU0 model is selected separately by train_parallel.py)
     # -----------------------------------------------------------------------
     print("\n[train] Selecting final best model...")

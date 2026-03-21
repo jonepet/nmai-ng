@@ -50,6 +50,20 @@ services:
     working_dir: /workspace/project
     command: python scripts/prepare_data.py
 
+  compute-embeddings:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./:/workspace/project
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace/project
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=0
+    command: python scripts/compute_embeddings.py
+
   hard-mining:
     build:
       context: .

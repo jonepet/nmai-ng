@@ -74,6 +74,9 @@ AMP = True                 # Automatic Mixed Precision (FP16) — essential for 
 ADAPTIVE_LR_LOW_LOSS = 1.0   # If val loss < this, reduce lr by 10x for next stage
 ADAPTIVE_LR_HIGH_LOSS = 2.0  # If val loss > this, keep lr unchanged
 
+# Hard mining rounds — after stages 1-3, mine hard examples and retrain
+HARD_MINING_ROUNDS = 2       # Number of mine→retrain cycles after initial stages
+
 # Stage configurations
 TRAINING_STAGES = [
     {

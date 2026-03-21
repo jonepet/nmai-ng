@@ -1,21 +1,16 @@
 # NOTE: This file is self-contained for sandbox deployment. Config values are duplicated here intentionally.
 """
-NorgesGruppen grocery product detection — ensemble inference script.
+NorgesGruppen grocery product detection — ensemble inference with product re-ID.
 
 Strategy:
-    1. Load multiple trained YOLOv8 models (diverse training)
-    2. Run each model at multiple scales (640, 1280) for better small-object detection
-    3. Merge all predictions using Weighted Box Fusion (WBF)
+    1. Load YOLOv8 models and run multi-scale detection
+    2. Merge predictions with Weighted Box Fusion (WBF)
+    3. For low-confidence classifications, re-identify products by comparing
+       cropped detections against pre-computed product reference embeddings
     4. Maximize the 24GB L4 GPU and 300s timeout
 
-Sandbox environment:
-    Python 3.11, PyTorch 2.6.0+cu124, ultralytics 8.1.0
-    NVIDIA L4 GPU (24GB VRAM), 8GB RAM, 4 vCPU
-    300 s timeout, no network access
-    Pre-installed: ensemble-boxes 1.0.9
-
-Usage:
-    python run.py --input /path/to/images --output /path/to/predictions.json
+Sandbox: Python 3.11, PyTorch 2.6.0+cu124, ultralytics 8.1.0,
+         ensemble-boxes 1.0.9, numpy 1.26.4, Pillow 10.2.0
 """
 
 import argparse
@@ -26,11 +21,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from ensemble_boxes import weighted_boxes_fusion
+from PIL import Image
 from ultralytics import YOLO
 
 
 # ---------------------------------------------------------------------------
-# Configuration (duplicated from config.py — sandbox can't import it)
+# Configuration (duplicated — sandbox can't import config.py)
 # ---------------------------------------------------------------------------
 
 MODEL_FILES = ["best_main.pt", "best_parallel.pt"]
@@ -38,6 +34,11 @@ INFERENCE_SCALES = [640, 1280]
 WBF_IOU_THRESHOLD = 0.55
 WBF_SCORE_THRESHOLD = 0.001
 WBF_SKIP_BOX_THRESHOLD = 0.0001
+
+# Re-ID: reclassify detections below this confidence threshold
+REID_CONFIDENCE_THRESHOLD = 0.5
+# Re-ID: minimum similarity to accept reclassification
+REID_MIN_SIMILARITY = 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,6 @@ def collect_images(input_dir: Path) -> list[Path]:
 
 
 def load_models(script_dir: Path, device: str) -> list[YOLO]:
-    """Load all available model weight files."""
     models = []
     for name in MODEL_FILES:
         path = script_dir / name
@@ -70,7 +70,6 @@ def load_models(script_dir: Path, device: str) -> list[YOLO]:
             m.to(device)
             models.append(m)
     if not models:
-        # Fallback: try best.pt for backward compatibility
         fallback = script_dir / "best.pt"
         if fallback.exists():
             print(f"Loading fallback model: {fallback.name}")
@@ -78,12 +77,87 @@ def load_models(script_dir: Path, device: str) -> list[YOLO]:
             m.to(device)
             models.append(m)
     if not models:
-        raise FileNotFoundError(
-            f"No model weights found in {script_dir}. "
-            f"Expected: {MODEL_FILES} or best.pt"
-        )
+        raise FileNotFoundError(f"No model weights found in {script_dir}")
     print(f"Loaded {len(models)} model(s)")
     return models
+
+
+# ---------------------------------------------------------------------------
+# Product Re-ID
+# ---------------------------------------------------------------------------
+
+class ProductReID:
+    """Re-identify products by comparing crops against reference embeddings."""
+
+    def __init__(self, script_dir: Path, yolo_model: YOLO, device: str):
+        self.enabled = False
+        self.device = device
+
+        emb_path = script_dir / "product_embeddings.npy"
+        map_path = script_dir / "product_mapping.json"
+
+        if not emb_path.exists() or not map_path.exists():
+            print("Product re-ID: disabled (no embeddings found)")
+            return
+
+        self.embeddings = np.load(str(emb_path))  # (N, embed_dim)
+        with open(map_path) as f:
+            self.mapping = json.load(f)
+
+        self.category_ids = [m["category_id"] for m in self.mapping]
+
+        # Extract backbone from the YOLO model for feature extraction
+        self.backbone = yolo_model.model.model[:10]
+        self.backbone.eval()
+
+        self.enabled = True
+        print(f"Product re-ID: enabled ({len(self.mapping)} products, dim={self.embeddings.shape[1]})")
+
+    def _extract_embedding(self, crop_img: Image.Image) -> np.ndarray:
+        """Extract normalized feature vector from a cropped product image."""
+        from torchvision import transforms
+
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+        tensor = transform(crop_img).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            features = tensor
+            for layer in self.backbone:
+                features = layer(features)
+            pooled = torch.nn.functional.adaptive_avg_pool2d(features, 1)
+            embedding = pooled.flatten().cpu().numpy()
+
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+        return embedding
+
+    def reclassify(self, crop_img: Image.Image, current_score: float) -> tuple[int, float] | None:
+        """
+        Try to reclassify a crop using reference embeddings.
+
+        Returns (category_id, similarity) if a good match is found, else None.
+        Only called when current_score < REID_CONFIDENCE_THRESHOLD.
+        """
+        if not self.enabled:
+            return None
+
+        embedding = self._extract_embedding(crop_img)
+
+        # Cosine similarity (embeddings are L2-normalized)
+        similarities = self.embeddings @ embedding
+        best_idx = int(np.argmax(similarities))
+        best_sim = float(similarities[best_idx])
+
+        if best_sim >= REID_MIN_SIMILARITY:
+            return self.category_ids[best_idx], best_sim
+
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -98,12 +172,6 @@ def run_single_pass(
     img_w: int,
     img_h: int,
 ) -> tuple[list[list[float]], list[float], list[int]]:
-    """
-    Run one model at one scale on one image.
-
-    Returns (boxes_norm, scores, labels) where boxes_norm is [[x1,y1,x2,y2], ...]
-    normalized to [0,1] as required by WBF.
-    """
     boxes_norm = []
     scores = []
     labels = []
@@ -125,7 +193,6 @@ def run_single_pass(
                 continue
 
             x1, y1, x2, y2 = xyxy[i]
-            # Normalize to [0, 1] for WBF
             boxes_norm.append([
                 max(0.0, x1 / img_w),
                 max(0.0, y1 / img_h),
@@ -143,10 +210,8 @@ def run_single_pass(
 # ---------------------------------------------------------------------------
 
 def get_image_dimensions(image_path: Path) -> tuple[int, int]:
-    """Get image width and height without importing PIL (uses torch/cv2)."""
-    from PIL import Image
     with Image.open(image_path) as img:
-        return img.size  # (width, height)
+        return img.size
 
 
 # ---------------------------------------------------------------------------
@@ -157,15 +222,11 @@ def run_ensemble_for_image(
     models: list[YOLO],
     image_path: Path,
     device: str,
+    reid: ProductReID | None,
 ) -> list[dict]:
-    """
-    Run all models at all scales on one image, fuse with WBF,
-    return COCO-format predictions.
-    """
     image_id = extract_image_id(image_path.stem)
     img_w, img_h = get_image_dimensions(image_path)
 
-    # Collect predictions from all model × scale combinations
     all_boxes = []
     all_scores = []
     all_labels = []
@@ -183,20 +244,20 @@ def run_ensemble_for_image(
     if not all_boxes:
         return []
 
-    # Weighted Box Fusion
-    # weights: all passes contribute equally
     weights = [1.0] * len(all_boxes)
 
     fused_boxes, fused_scores, fused_labels = weighted_boxes_fusion(
-        all_boxes,
-        all_scores,
-        all_labels,
+        all_boxes, all_scores, all_labels,
         weights=weights,
         iou_thr=WBF_IOU_THRESHOLD,
         skip_box_thr=WBF_SCORE_THRESHOLD,
     )
 
-    # Convert back to COCO format [x, y, w, h] in pixels
+    # Re-ID pass: reclassify low-confidence detections
+    pil_img = None
+    if reid and reid.enabled:
+        pil_img = Image.open(image_path).convert("RGB")
+
     predictions = []
     for i in range(len(fused_boxes)):
         x1 = fused_boxes[i][0] * img_w
@@ -205,12 +266,28 @@ def run_ensemble_for_image(
         y2 = fused_boxes[i][3] * img_h
         w = x2 - x1
         h = y2 - y1
+        score = float(fused_scores[i])
+        category_id = int(fused_labels[i])
+
+        # Try re-ID for low-confidence classifications
+        if reid and reid.enabled and score < REID_CONFIDENCE_THRESHOLD and pil_img is not None:
+            # Crop the detection region
+            crop = pil_img.crop((
+                max(0, int(x1)),
+                max(0, int(y1)),
+                min(img_w, int(x2)),
+                min(img_h, int(y2)),
+            ))
+            if crop.size[0] > 10 and crop.size[1] > 10:
+                result = reid.reclassify(crop, score)
+                if result is not None:
+                    category_id, sim = result
 
         predictions.append({
             "image_id": image_id,
-            "category_id": int(fused_labels[i]),
+            "category_id": category_id,
             "bbox": [round(x1, 4), round(y1, 4), round(w, 4), round(h, 4)],
-            "score": round(float(fused_scores[i]), 6),
+            "score": round(score, 6),
         })
 
     return predictions
@@ -221,7 +298,7 @@ def run_ensemble_for_image(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NorgesGruppen product detection — ensemble inference")
+    parser = argparse.ArgumentParser(description="NorgesGruppen product detection — ensemble + re-ID")
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -235,36 +312,32 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # Load all models
     script_dir = Path(__file__).parent
     models = load_models(script_dir, device)
     print(f"Inference scales: {INFERENCE_SCALES}")
-    print(f"Total passes per image: {len(models)} model(s) x {len(INFERENCE_SCALES)} scale(s) = {len(models) * len(INFERENCE_SCALES)}")
 
-    # Collect images
+    # Initialize product re-ID (uses first model's backbone)
+    reid = ProductReID(script_dir, models[0], device)
+
     image_paths = collect_images(input_dir)
     print(f"Found {len(image_paths)} image(s)")
 
     if not image_paths:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text("[]", encoding="utf-8")
-        print("No images found — wrote empty predictions.")
         return
 
-    # Run ensemble inference
     all_predictions = []
     for idx, image_path in enumerate(image_paths):
-        preds = run_ensemble_for_image(models, image_path, device)
+        preds = run_ensemble_for_image(models, image_path, device, reid)
         all_predictions.extend(preds)
         if (idx + 1) % 50 == 0 or idx == 0:
-            print(f"  Processed {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions so far")
+            print(f"  Processed {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions")
 
-    print(f"Total: {len(all_predictions)} predictions from {len(image_paths)} images")
+    print(f"Total: {len(all_predictions)} predictions")
 
-    # Sort by image_id
     all_predictions.sort(key=lambda p: p["image_id"])
 
-    # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(all_predictions, indent=None, separators=(",", ":")),
