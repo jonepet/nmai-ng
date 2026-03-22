@@ -70,15 +70,68 @@ def collect_val_images() -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
+def _load_classifier():
+    """Load classifier ONNX if it exists."""
+    import json as _json
+    cfg_path = config.SUBMISSION_DIR / "config.json"
+    if not cfg_path.exists():
+        return None, 0, 0.0
+
+    cfg = _json.load(open(cfg_path))
+    cls_file = cfg.get("classifier_file")
+    cls_input_size = cfg.get("classifier_input_size", 128)
+    cls_conf_thresh = cfg.get("classifier_confidence_threshold", 0.3)
+
+    if not cls_file:
+        return None, cls_input_size, cls_conf_thresh
+
+    cls_path = config.SUBMISSION_DIR / cls_file
+    if not cls_path.exists():
+        cls_path = config.CHECKPOINT_ROOT / cls_file
+    if not cls_path.exists():
+        print(f"  Classifier not found, skipping reclassification")
+        return None, cls_input_size, cls_conf_thresh
+
+    import onnxruntime as ort
+    print(f"  Loading classifier: {cls_path.name}")
+    sess = ort.InferenceSession(str(cls_path), providers=["CPUExecutionProvider"])
+    return sess, cls_input_size, cls_conf_thresh
+
+
+def _classify_crop(crop_img, classifier, input_size):
+    """Classify a single crop image, return (category_id, confidence)."""
+    import numpy as np
+    from PIL import Image
+
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+
+    resized = crop_img.resize((input_size, input_size), Image.BILINEAR)
+    arr = np.array(resized, dtype=np.float32) / 255.0
+    arr = np.transpose(arr, (2, 0, 1))
+    arr = (arr - mean) / std
+    arr = np.expand_dims(arr, 0)
+
+    input_name = classifier.get_inputs()[0].name
+    logits = classifier.run(None, {input_name: arr})[0][0]
+    e = np.exp(logits - np.max(logits))
+    probs = e / e.sum()
+    cls_id = int(np.argmax(probs))
+    return cls_id, float(probs[cls_id])
+
+
 def run_inference(checkpoint: Path, image_paths: list[Path]) -> list[dict]:
     """Load checkpoint and run inference on image_paths, returning COCO predictions."""
     try:
         from ultralytics import YOLO
     except ImportError:
         raise RuntimeError("ultralytics is required. Install with: pip install ultralytics")
+    from PIL import Image
 
     print(f"  Loading model: {checkpoint}")
     model = YOLO(str(checkpoint))
+
+    classifier, cls_input_size, cls_conf_thresh = _load_classifier()
 
     predictions: list[dict] = []
     total = len(image_paths)
@@ -91,12 +144,17 @@ def run_inference(checkpoint: Path, image_paths: list[Path]) -> list[dict]:
 
         results = model(str(image_path), device="cpu", verbose=False)
 
+        img_pil = None
+        if classifier:
+            img_pil = Image.open(image_path).convert("RGB")
+
         for result in results:
             boxes = result.boxes
             if boxes is None or len(boxes) == 0:
                 continue
 
             xywh = boxes.xywh.cpu()
+            xyxy = boxes.xyxy.cpu()
             scores = boxes.conf.cpu()
             class_ids = boxes.cls.cpu().int()
 
@@ -104,19 +162,29 @@ def run_inference(checkpoint: Path, image_paths: list[Path]) -> list[dict]:
                 x_center, y_center, w, h = xywh[i].tolist()
                 x = x_center - w / 2.0
                 y = y_center - h / 2.0
+                score = float(scores[i].item())
+                cat_id = int(class_ids[i].item())
+
+                # Reclassify with classifier if score is low
+                if classifier and img_pil and score < cls_conf_thresh:
+                    x1, y1, x2, y2 = xyxy[i].tolist()
+                    if (x2 - x1) > 2 and (y2 - y1) > 2:
+                        crop = img_pil.crop((int(x1), int(y1), int(x2), int(y2)))
+                        new_id, conf = _classify_crop(crop, classifier, cls_input_size)
+                        if conf > 0.5:
+                            cat_id = new_id
 
                 predictions.append(
                     {
                         "image_id": image_id,
-                        # 0-based category_id (0–356), matching competition format
-                        "category_id": int(class_ids[i].item()),
+                        "category_id": cat_id,
                         "bbox": [
                             round(x, 4),
                             round(y, 4),
                             round(w, 4),
                             round(h, 4),
                         ],
-                        "score": round(float(scores[i].item()), 6),
+                        "score": round(score, 6),
                     }
                 )
 

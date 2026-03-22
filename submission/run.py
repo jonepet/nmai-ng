@@ -220,7 +220,6 @@ def reclassify_detections(
 
         if cls_conf > 0.5:  # only override if classifier is confident
             detections[idx]["category_id"] = cls_id
-            detections[idx]["score"] = round(float(detections[idx]["score"]) * cls_conf, 3)
 
     return detections
 
@@ -287,17 +286,13 @@ def run_ensemble_for_image(
     if not all_boxes:
         return []
 
-    if len(all_boxes) == 1:
-        fused_boxes = np.array(all_boxes[0])
-        fused_scores = np.array(all_scores[0])
-        fused_labels = np.array(all_labels[0])
-    else:
-        fused_boxes, fused_scores, fused_labels = weighted_boxes_fusion(
-            all_boxes, all_scores, all_labels,
-            weights=[1.0] * len(all_boxes),
-            iou_thr=WBF_IOU_THRESHOLD,
-            skip_box_thr=WBF_SCORE_THRESHOLD,
-        )
+    # Always run WBF — acts as NMS for single model, merges overlapping boxes
+    fused_boxes, fused_scores, fused_labels = weighted_boxes_fusion(
+        all_boxes, all_scores, all_labels,
+        weights=[1.0] * len(all_boxes),
+        iou_thr=WBF_IOU_THRESHOLD,
+        skip_box_thr=WBF_SCORE_THRESHOLD,
+    )
 
     predictions = []
     for i in range(len(fused_boxes)):
@@ -316,10 +311,8 @@ def run_ensemble_for_image(
             "score": round(float(fused_scores[i]), 3),
         })
 
-    # Classifier reclassification disabled — needs validation on real test data
-    # before enabling. YOLO classification alone is used.
-    # if classifier and predictions:
-    #     predictions = reclassify_detections(predictions, img, classifier)
+    if classifier and predictions:
+        predictions = reclassify_detections(predictions, img, classifier)
 
     return predictions
 
@@ -357,7 +350,7 @@ def main() -> None:
     for idx, image_path in enumerate(image_paths):
         preds = run_ensemble_for_image(sessions, classifier, image_path)
         all_predictions.extend(preds)
-        if (idx + 1) % 50 == 0 or idx == 0:
+        if True:
             print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions")
 
     # Hard cap at 49000 predictions to stay under competition limit of 50000

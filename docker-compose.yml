@@ -160,6 +160,11 @@ services:
       - /tmp:size=2G
     deploy:
       resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
         limits:
           cpus: "4"
           memory: 16G
@@ -167,6 +172,5 @@ services:
     environment:
       - SANDBOX_ENV=1
       - HOME=/tmp
-      - CUDA_VISIBLE_DEVICES=""
     entrypoint: ["python"]
     command: ["/workspace/sandbox_run.py", "--dir", "/submission", "--annotations", "/data/coco_dataset/train/annotations.json", "--images", "/data/coco_dataset/train/images", "--data-images-dir", "/tmp/images", "--output-dir", "/tmp/output"]

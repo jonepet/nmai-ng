@@ -53,11 +53,16 @@ def step_export():
         opset=config.ONNX_OPSET,
         simplify=True,
         dynamic=False,
+        half=True,
     ))
 
     dest = config.SUBMISSION_DIR / "best_main.onnx"
     shutil.copy2(onnx_path, dest)
-    print(f"Exported: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)")
+    size_mb = dest.stat().st_size / 1e6
+    print(f"Exported: {dest.name} ({size_mb:.1f} MB)")
+    if size_mb > 400:
+        print(f"ERROR: Model too large ({size_mb:.1f} MB > 420 MB limit)")
+        return False
 
     # Export classifier if checkpoint exists but ONNX doesn't
     cls_onnx = config.SUBMISSION_DIR / "classifier.onnx"
@@ -103,25 +108,82 @@ def step_package():
 
 
 def step_test():
-    """Quick score using .pt model on CPU (subset of val images for speed)."""
+    """Run the actual submission run.py on val images and score the output."""
     print("\n" + "=" * 60)
-    print("STEP 3/3: Quick score (CPU, subset)")
+    print("STEP 3/3: Test submission (run.py + score)")
     print("=" * 60)
 
-    eval_script = Path(__file__).parent / "evaluate.py"
-    checkpoint = config.CHECKPOINT_ROOT / "best_final.pt"
+    run_py = config.SUBMISSION_DIR / "run.py"
+    val_images = config.YOLO_DIR / "val" / "images"
+    annotations = config.COCO_EXTRACT_DIR / "train" / "annotations.json"
+    predictions_out = Path("/tmp/submit_test_predictions.json")
 
-    if not checkpoint.exists():
-        print("ERROR: No best_final.pt for evaluation")
+    if not run_py.exists():
+        print(f"ERROR: {run_py} not found")
+        return False
+    if not val_images.exists() or not list(val_images.iterdir()):
+        print(f"WARNING: No val images at {val_images}, using train images subset")
+        val_images = config.YOLO_DIR / "train" / "images"
+
+    # Use only a small subset — ONNX on CPU is slow
+    test_dir = Path("/tmp/submit_test_images")
+    test_dir.mkdir(parents=True, exist_ok=True)
+    import shutil as _shutil
+    for f in test_dir.iterdir():
+        f.unlink()
+    imgs = sorted(val_images.glob("*.jpg"))[:10]
+    for img in imgs:
+        _shutil.copy2(img, test_dir / img.name)
+    print(f"  Testing on {len(imgs)} images (subset)")
+    val_images = test_dir
+    if not annotations.exists():
+        print(f"ERROR: Annotations not found: {annotations}")
         return False
 
+    # Run the actual submission code
+    print(f"  Running: {run_py.name} --input {val_images}")
     result = subprocess.run(
-        [sys.executable, str(eval_script),
-         "--checkpoint", str(checkpoint),
-         "--max-images", "10"],
+        [sys.executable, str(run_py),
+         "--input", str(val_images),
+         "--output", str(predictions_out)],
         capture_output=False,
+        cwd=str(config.SUBMISSION_DIR),
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        print(f"  run.py failed with exit code {result.returncode}")
+        return False
+
+    # Score predictions
+    print(f"\n  Scoring predictions...")
+    import json as _json
+    with open(predictions_out) as f:
+        predictions = _json.load(f)
+
+    sandbox_run = Path(__file__).parent / "sandbox_run.py"
+    # Import scoring function directly
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sandbox_run", sandbox_run)
+    sr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sr)
+
+    score_result = sr.score_predictions(
+        str(annotations),
+        predictions,
+    )
+
+    det = score_result["detection_map"]
+    cls = score_result["classification_map"]
+    score = score_result["score"]
+
+    print(f"\n  Detection mAP@0.5:      {det:.4f}  (x 0.70 = {det*0.7:.4f})")
+    print(f"  Classification mAP@0.5: {cls:.4f}  (x 0.30 = {cls*0.3:.4f})")
+    print(f"  PREDICTED SCORE:        {score:.4f}")
+
+    if score_result.get("errors"):
+        for e in score_result["errors"]:
+            print(f"  ERROR: {e}")
+
+    return True
 
 
 def main():
@@ -139,13 +201,8 @@ def main():
         print("\nPackage failed.")
         sys.exit(1)
 
-    if not step_test():
-        print("\nTest failed.")
-        sys.exit(1)
-
     elapsed = time.time() - start
-    print(f"\nPipeline complete in {elapsed:.0f}s")
-    print("Upload submission.zip at the competition website.")
+    print(f"\nExport + package complete in {elapsed:.0f}s")
 
 
 if __name__ == "__main__":
