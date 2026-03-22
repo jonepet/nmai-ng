@@ -219,7 +219,7 @@ def reclassify_detections(
         cls_id = int(np.argmax(probs))
         cls_conf = float(probs[cls_id])
 
-        if cls_conf > 0.5:  # only override if classifier is confident
+        if cls_conf > 0.95:  # only override if classifier is very confident
             detections[idx]["category_id"] = cls_id
 
     return detections
