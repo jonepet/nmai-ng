@@ -369,6 +369,12 @@ def run_ensemble_for_image(
             "score": round(float(fused_scores[i]), 3),
         })
 
+    # Limit detections per image (ultralytics default: 300)
+    MAX_DET = 300
+    if len(predictions) > MAX_DET:
+        predictions.sort(key=lambda p: p["score"], reverse=True)
+        predictions = predictions[:MAX_DET]
+
     if classifier and predictions:
         predictions = reclassify_detections(predictions, img, classifier)
 

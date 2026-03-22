@@ -596,14 +596,24 @@ def run_sandbox(
                 if len(partial_preds) > last_scored_count:
                     last_scored_count = len(partial_preds)
                     elapsed_so_far = time.monotonic() - start
-                    # Quick score
+                    # Quick score — filter GT to only images with predictions
                     try:
+                        pred_image_ids = {p["image_id"] for p in partial_preds}
+                        # Build filename filter from image_ids
+                        with open(annotations_path) as af:
+                            ann_data = json.load(af)
+                        img_filter = set()
+                        for img in ann_data["images"]:
+                            if img["id"] in pred_image_ids:
+                                img_filter.add(Path(img["file_name"]).name)
                         partial_score = score_predictions(
-                            str(annotations_path), partial_preds, image_name_filter=None)
+                            str(annotations_path), partial_preds,
+                            image_name_filter=img_filter if img_filter else None)
                         det = partial_score["detection_map"]
                         cls = partial_score["classification_map"]
                         score = partial_score["score"]
-                        print(f"  [{elapsed_so_far:.0f}s] {last_scored_count} preds → "
+                        n_imgs = len(pred_image_ids)
+                        print(f"  [{elapsed_so_far:.0f}s] {n_imgs} imgs, {last_scored_count} preds → "
                               f"det={det:.3f} cls={cls:.3f} score={score:.3f}", flush=True)
                     except Exception:
                         pass
