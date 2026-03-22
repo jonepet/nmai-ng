@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from ensemble_boxes import weighted_boxes_fusion
+from ensemble_boxes import weighted_boxes_fusion, nms
 from PIL import Image
 
 
@@ -262,7 +262,17 @@ def run_single_pass(session: ort.InferenceSession, img: Image.Image,
     outputs = session.run(None, {input_name: arr})
 
     detections = postprocess(outputs[0], ratio, pad_w, pad_h, img_w, img_h, CONF_THRESHOLD)
-    return _detections_to_normalized(detections, img_w, img_h)
+    boxes_norm, scores, labels = _detections_to_normalized(detections, img_w, img_h)
+
+    if not boxes_norm:
+        return [], [], []
+
+    # Apply NMS to remove overlapping boxes from same model
+    nms_boxes, nms_scores, nms_labels = nms(
+        [boxes_norm], [scores], [labels],
+        iou_thr=0.5,
+    )
+    return nms_boxes.tolist(), nms_scores.tolist(), nms_labels.tolist()
 
 
 def run_tta_pass(session: ort.InferenceSession, img: Image.Image,
