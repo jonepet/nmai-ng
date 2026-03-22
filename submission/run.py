@@ -188,18 +188,19 @@ def reclassify_detections(
     img: Image.Image,
     classifier: ort.InferenceSession,
 ) -> list[dict]:
-    """Reclassify ALL detections using the product classifier for better category accuracy."""
+    """Reclassify low-confidence YOLO detections using the product classifier."""
     if not detections:
         return detections
 
     indices_to_classify = []
     crops = []
     for i, det in enumerate(detections):
-        x, y, w, h = det["bbox"]
-        if w > 2 and h > 2:  # skip tiny crops
-            crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
-            crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
-            indices_to_classify.append(i)
+        if det["score"] < CLASSIFIER_CONF_THRESHOLD:
+            x, y, w, h = det["bbox"]
+            if w > 2 and h > 2:  # skip tiny crops
+                crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
+                crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
+                indices_to_classify.append(i)
 
     if not crops:
         return detections
@@ -219,7 +220,7 @@ def reclassify_detections(
         cls_id = int(np.argmax(probs))
         cls_conf = float(probs[cls_id])
 
-        if cls_conf > 0.95:  # only override if classifier is very confident
+        if cls_conf > 0.5:  # only override if classifier is confident
             detections[idx]["category_id"] = cls_id
 
     return detections
