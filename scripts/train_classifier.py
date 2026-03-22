@@ -133,6 +133,62 @@ def build_category_map(annotations_path: Path) -> dict[str, int]:
                 code_to_catid[code] = i
 
     print(f"  Mapped {len(code_to_catid)} product codes to category IDs")
+
+    # Fill missing categories by cropping from shelf training images
+    all_cat_ids = {cat["id"] for cat in coco.get("categories", [])}
+    mapped_cat_ids = set(code_to_catid.values())
+    missing = all_cat_ids - mapped_cat_ids
+    if missing:
+        print(f"  {len(missing)} categories missing from product images — cropping from shelf images...")
+        id_to_name = {c["id"]: c["name"] for c in coco["categories"]}
+        img_id_to_file = {img["id"]: img["file_name"] for img in coco["images"]}
+        images_dir = config.COCO_EXTRACT_DIR / "train" / "images"
+        from PIL import Image as PILImage
+
+        for cat_id in sorted(missing):
+            anns = [a for a in coco["annotations"] if a["category_id"] == cat_id]
+            if not anns:
+                continue
+            prod_dir = product_dir / str(cat_id)
+            prod_dir.mkdir(parents=True, exist_ok=True)
+            n_crops = 0
+            for ann in anns[:10]:
+                img_file = img_id_to_file.get(ann["image_id"])
+                if not img_file:
+                    continue
+                img_path = images_dir / Path(img_file).name
+                if not img_path.exists():
+                    continue
+                try:
+                    img = PILImage.open(img_path)
+                    x, y, w, h = ann["bbox"]
+                    if w > 5 and h > 5:
+                        crop = img.crop((int(x), int(y), int(x+w), int(y+h)))
+                        crop.save(prod_dir / f"crop_{n_crops}.jpg")
+                        n_crops += 1
+                except Exception:
+                    continue
+            if n_crops > 0:
+                code_to_catid[str(cat_id)] = cat_id
+        # Update metadata
+        import json as _json
+        meta_path = product_dir / "metadata.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = _json.load(f)
+            existing_codes = {p["product_code"] for p in meta.get("products", [])}
+            for cat_id in missing:
+                code = str(cat_id)
+                if code not in existing_codes and (product_dir / code).exists():
+                    meta["products"].append({
+                        "product_code": code,
+                        "product_name": id_to_name.get(cat_id, ""),
+                    })
+            with open(meta_path, "w") as f:
+                _json.dump(meta, f, indent=2)
+        mapped_cat_ids = set(code_to_catid.values())
+        print(f"  Now covering {len(mapped_cat_ids)} categories")
+
     return code_to_catid
 
 
