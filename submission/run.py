@@ -288,7 +288,12 @@ def run_tta_pass(session: ort.InferenceSession, img: Image.Image,
     boxes_flip = []
     for b in boxes_f:
         x1, y1, x2, y2 = b
-        boxes_flip.append([1.0 - x2, y1, 1.0 - x1, y2])
+        boxes_flip.append([
+            max(0.0, min(1.0, 1.0 - x2)),
+            max(0.0, min(1.0, y1)),
+            max(0.0, min(1.0, 1.0 - x1)),
+            max(0.0, min(1.0, y2)),
+        ])
 
     # Merge with WBF
     all_boxes = []
