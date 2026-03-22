@@ -6,7 +6,7 @@
     "best_main.onnx": "best_final.pt"
   },
   "imgsz": 640,
-  "conf_threshold": 0.25,
+  "conf_threshold": 0.05,
   "wbf_iou_threshold": 0.55,
   "wbf_score_threshold": 0.01,
   "nc": 357,
