@@ -247,10 +247,21 @@ def train_classifier(device: str = "cpu"):
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False,
                             num_workers=2, pin_memory=(device != "cpu"))
 
-    # Model: EfficientNet-B0 — good accuracy/size tradeoff
-    print(f"\nBuilding EfficientNet-B0 classifier ({num_classes} classes)...")
+    # Model: EfficientNet-B0 — resume from checkpoint if available
     model = models.efficientnet_b0(weights="IMAGENET1K_V1")
     model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+
+    if CLASSIFIER_CHECKPOINT.exists():
+        print(f"\nResuming from {CLASSIFIER_CHECKPOINT.name}...")
+        ckpt = torch.load(str(CLASSIFIER_CHECKPOINT), map_location=device, weights_only=False)
+        if ckpt.get("num_classes") == num_classes:
+            model.load_state_dict(ckpt["model_state_dict"])
+            print(f"  Loaded checkpoint (val_acc={ckpt.get('val_acc', '?')}, epoch={ckpt.get('epoch', '?')})")
+        else:
+            print(f"  Checkpoint has {ckpt.get('num_classes')} classes, need {num_classes} — starting fresh")
+    else:
+        print(f"\nBuilding EfficientNet-B0 classifier ({num_classes} classes)...")
+
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)

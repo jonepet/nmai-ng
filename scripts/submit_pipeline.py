@@ -60,6 +60,9 @@ def step_export():
     shutil.copy2(onnx_path, dest)
     size_mb = dest.stat().st_size / 1e6
     print(f"Exported: {dest.name} ({size_mb:.1f} MB)")
+    if size_mb < 1:
+        print(f"ERROR: Export corrupted ({size_mb:.1f} MB)")
+        return False
     if size_mb > 400:
         print(f"ERROR: Model too large ({size_mb:.1f} MB > 420 MB limit)")
         return False

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from ensemble_boxes import weighted_boxes_fusion
+from ensemble_boxes import weighted_boxes_fusion, nms
 from PIL import Image
 
 
@@ -38,7 +38,6 @@ WBF_SCORE_THRESHOLD = _cfg["wbf_score_threshold"]
 CLASSIFIER_FILE = _cfg.get("classifier_file")
 CLASSIFIER_INPUT_SIZE = _cfg.get("classifier_input_size", 128)
 CLASSIFIER_CONF_THRESHOLD = _cfg.get("classifier_confidence_threshold", 0.3)
-CLASSIFIER_SCORE_BLEND = _cfg.get("classifier_score_blend", 0.3)
 
 # ImageNet normalization for classifier
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
@@ -189,34 +188,20 @@ def reclassify_detections(
     img: Image.Image,
     classifier: ort.InferenceSession,
 ) -> list[dict]:
-    """Reclassify all detections using the dedicated product classifier.
-
-    The EfficientNet-B0 classifier is trained on canonical reference product
-    images and outperforms YOLO's joint detection+classification head on the
-    fine-grained 357-category grocery task.
-
-    Strategy:
-    - Always classify every detection (no YOLO-score gate).
-    - Override category_id when classifier_conf > CLASSIFIER_CONF_THRESHOLD.
-      With 357 classes, softmax random baseline is ~0.0028, so 0.3 is strong
-      signal even though it is below the old 0.5 guard.
-    - Blend the detection score: new_score = (1 - blend) * yolo_score
-      + blend * cls_conf. This lifts correctly-reclassified boxes in the
-      PR-curve ranking used for classification mAP (the 30% scoring component)
-      without significantly affecting detection mAP (category-blind).
-    """
+    """Reclassify only low-confidence YOLO detections using the product classifier."""
     if not detections:
         return detections
 
-    # Collect crops for all non-tiny detections
+    # Only reclassify detections where YOLO is uncertain
     indices_to_classify = []
     crops = []
     for i, det in enumerate(detections):
-        x, y, w, h = det["bbox"]
-        if w > 2 and h > 2:  # skip degenerate crops
-            crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
-            crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
-            indices_to_classify.append(i)
+        if det["score"] < CLASSIFIER_CONF_THRESHOLD:
+            x, y, w, h = det["bbox"]
+            if w > 2 and h > 2:  # skip tiny crops
+                crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
+                crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
+                indices_to_classify.append(i)
 
     if not crops:
         return detections
@@ -236,14 +221,8 @@ def reclassify_detections(
         cls_id = int(np.argmax(probs))
         cls_conf = float(probs[cls_id])
 
-        if cls_conf > CLASSIFIER_CONF_THRESHOLD:
+        if cls_conf > 0.5:  # only override if classifier is confident
             detections[idx]["category_id"] = cls_id
-
-        # Blend score regardless of whether category was overridden:
-        # improves PR-curve ranking for the classification mAP component.
-        yolo_score = detections[idx]["score"]
-        blended = (1.0 - CLASSIFIER_SCORE_BLEND) * yolo_score + CLASSIFIER_SCORE_BLEND * cls_conf
-        detections[idx]["score"] = round(blended, 3)
 
     return detections
 
@@ -283,7 +262,17 @@ def run_single_pass(session: ort.InferenceSession, img: Image.Image,
     outputs = session.run(None, {input_name: arr})
 
     detections = postprocess(outputs[0], ratio, pad_w, pad_h, img_w, img_h, CONF_THRESHOLD)
-    return _detections_to_normalized(detections, img_w, img_h)
+    boxes_norm, scores, labels = _detections_to_normalized(detections, img_w, img_h)
+
+    if not boxes_norm:
+        return [], [], []
+
+    # Apply NMS to remove overlapping boxes from same model
+    nms_boxes, nms_scores, nms_labels = nms(
+        [boxes_norm], [scores], [labels],
+        iou_thr=0.5,
+    )
+    return nms_boxes.tolist(), nms_scores.tolist(), nms_labels.tolist()
 
 
 def run_tta_pass(session: ort.InferenceSession, img: Image.Image,
@@ -324,7 +313,6 @@ def run_tta_pass(session: ort.InferenceSession, img: Image.Image,
         weights=[1.0] * len(all_boxes),
         iou_thr=WBF_IOU_THRESHOLD,
         skip_box_thr=WBF_SCORE_THRESHOLD,
-        conf_type='box_and_model_avg',
     )
     return fused_boxes.tolist(), fused_scores.tolist(), fused_labels.tolist()
 
@@ -362,7 +350,6 @@ def run_ensemble_for_image(
         weights=[1.0] * len(all_boxes),
         iou_thr=WBF_IOU_THRESHOLD,
         skip_box_thr=WBF_SCORE_THRESHOLD,
-        conf_type='box_and_model_avg',
     )
 
     predictions = []

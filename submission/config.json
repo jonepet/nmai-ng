@@ -11,6 +11,5 @@
   "wbf_score_threshold": 0.01,
   "nc": 357,
   "onnx_opset": 17,
-  "classifier_confidence_threshold": 0.3,
-  "classifier_score_blend": 0.3
+  "classifier_confidence_threshold": 0.3
 }
