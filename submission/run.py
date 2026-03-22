@@ -68,7 +68,9 @@ def collect_images(input_dir: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 def load_onnx_sessions(script_dir: Path) -> list[ort.InferenceSession]:
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    available = ort.get_available_providers()
+    providers = [p for p in ["CUDAExecutionProvider", "CPUExecutionProvider"] if p in available]
+    print(f"ONNX providers: {providers}")
     sessions = []
     for name in MODEL_FILES:
         path = script_dir / name
@@ -91,9 +93,10 @@ def load_classifier(script_dir: Path) -> ort.InferenceSession | None:
     if not path.exists():
         print(f"Classifier not found: {path.name}, using YOLO classes only")
         return None
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    available = ort.get_available_providers()
+    cls_providers = [p for p in ["CUDAExecutionProvider", "CPUExecutionProvider"] if p in available]
     print(f"Loading classifier: {path.name}")
-    sess = ort.InferenceSession(str(path), providers=providers)
+    sess = ort.InferenceSession(str(path), providers=cls_providers)
     print(f"Classifier loaded, providers: {sess.get_providers()}")
     return sess
 
@@ -233,15 +236,8 @@ def _softmax(x: np.ndarray) -> np.ndarray:
 # Single-pass inference
 # ---------------------------------------------------------------------------
 
-def run_single_pass(session: ort.InferenceSession, img: Image.Image,
-                    img_w: int, img_h: int
-                    ) -> tuple[list[list[float]], list[float], list[int]]:
-    arr, ratio, pad_w, pad_h, _, _ = preprocess(img, IMGSZ)
-    input_name = session.get_inputs()[0].name
-    outputs = session.run(None, {input_name: arr})
-
-    detections = postprocess(outputs[0], ratio, pad_w, pad_h, img_w, img_h, CONF_THRESHOLD)
-
+def _detections_to_normalized(detections: list[dict], img_w: int, img_h: int
+                              ) -> tuple[list[list[float]], list[float], list[int]]:
     boxes_norm = []
     scores = []
     labels = []
@@ -255,8 +251,60 @@ def run_single_pass(session: ort.InferenceSession, img: Image.Image,
         ])
         scores.append(det["score"])
         labels.append(det["category_id"])
-
     return boxes_norm, scores, labels
+
+
+def run_single_pass(session: ort.InferenceSession, img: Image.Image,
+                    img_w: int, img_h: int
+                    ) -> tuple[list[list[float]], list[float], list[int]]:
+    arr, ratio, pad_w, pad_h, _, _ = preprocess(img, IMGSZ)
+    input_name = session.get_inputs()[0].name
+    outputs = session.run(None, {input_name: arr})
+
+    detections = postprocess(outputs[0], ratio, pad_w, pad_h, img_w, img_h, CONF_THRESHOLD)
+    return _detections_to_normalized(detections, img_w, img_h)
+
+
+def run_tta_pass(session: ort.InferenceSession, img: Image.Image,
+                 img_w: int, img_h: int
+                 ) -> tuple[list[list[float]], list[float], list[int]]:
+    """Test-Time Augmentation: original + horizontal flip, merged with WBF."""
+    # Original
+    boxes1, scores1, labels1 = run_single_pass(session, img, img_w, img_h)
+
+    # Horizontal flip
+    img_flip = img.transpose(Image.FLIP_LEFT_RIGHT)
+    boxes_f, scores_f, labels_f = run_single_pass(session, img_flip, img_w, img_h)
+
+    # Mirror flip boxes back: x1_new = 1 - x2_old, x2_new = 1 - x1_old
+    boxes_flip = []
+    for b in boxes_f:
+        x1, y1, x2, y2 = b
+        boxes_flip.append([1.0 - x2, y1, 1.0 - x1, y2])
+
+    # Merge with WBF
+    all_boxes = []
+    all_scores = []
+    all_labels = []
+    if boxes1:
+        all_boxes.append(boxes1)
+        all_scores.append(scores1)
+        all_labels.append(labels1)
+    if boxes_flip:
+        all_boxes.append(boxes_flip)
+        all_scores.append(scores_f)
+        all_labels.append(labels_f)
+
+    if not all_boxes:
+        return [], [], []
+
+    fused_boxes, fused_scores, fused_labels = weighted_boxes_fusion(
+        all_boxes, all_scores, all_labels,
+        weights=[1.0] * len(all_boxes),
+        iou_thr=WBF_IOU_THRESHOLD,
+        skip_box_thr=WBF_SCORE_THRESHOLD,
+    )
+    return fused_boxes.tolist(), fused_scores.tolist(), fused_labels.tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +325,7 @@ def run_ensemble_for_image(
     all_labels = []
 
     for session in sessions:
-        boxes, scores, labels = run_single_pass(session, img, img_w, img_h)
+        boxes, scores, labels = run_tta_pass(session, img, img_w, img_h)
         if boxes:
             all_boxes.append(boxes)
             all_scores.append(scores)
@@ -351,7 +399,7 @@ def main() -> None:
         preds = run_ensemble_for_image(sessions, classifier, image_path)
         all_predictions.extend(preds)
         if True:
-            print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions")
+            print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions", flush=True)
 
     # Hard cap at 49000 predictions to stay under competition limit of 50000
     MAX_PREDICTIONS = 49000

@@ -53,7 +53,7 @@ def step_export():
         opset=config.ONNX_OPSET,
         simplify=True,
         dynamic=False,
-        half=True,
+        half=False,
     ))
 
     dest = config.SUBMISSION_DIR / "best_main.onnx"

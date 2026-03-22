@@ -6,22 +6,35 @@ source "$(dirname "$0")/env.sh"
 
 echo ""
 echo "============================================================"
-echo "  FULL SUBMISSION PIPELINE"
+echo "  SUBMISSION PIPELINE"
 echo "  export → package → test → score"
 echo "============================================================"
 
 echo ""
 echo "==> Ensuring training is running..."
-ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose up -d train evaluate"
+ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose up -d train"
 
 echo ""
-echo "==> Step 1/3: Exporting + Packaging..."
+echo "==> Exporting + Packaging..."
 ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose exec train python scripts/submit_pipeline.py"
 
 echo ""
-echo "==> Step 2/3: Copying submission.zip locally..."
-scp "$REMOTE_HOST:$REMOTE_DIR/submission.zip" "$PROJECT_DIR/submission.zip"
+echo "==> Building sandbox image..."
+ssh "$REMOTE_HOST" "cd $REMOTE_DIR && DOCKER_BUILDKIT=0 docker compose build sandbox"
 
 echo ""
-echo "==> Step 3/3: Testing in sandbox environment..."
-ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose run --rm --build sandbox"
+echo "==> Testing in sandbox..."
+ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker compose run --rm sandbox"
+
+echo ""
+echo "==> Copying submission.zip..."
+scp "$REMOTE_HOST:$REMOTE_DIR/submission.zip" "$PROJECT_DIR/submission.zip"
+
+SIZE=$(stat --printf="%s" "$PROJECT_DIR/submission.zip" 2>/dev/null || stat -f "%z" "$PROJECT_DIR/submission.zip")
+SIZE_MB=$((SIZE / 1048576))
+
+echo ""
+echo "============================================================"
+echo "  READY: $PROJECT_DIR/submission.zip (${SIZE_MB} MB)"
+echo "  Upload at the competition website."
+echo "============================================================"

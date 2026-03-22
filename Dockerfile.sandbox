@@ -41,9 +41,6 @@ RUN pip cache purge 2>/dev/null; \
            /usr/bin/gcc /usr/bin/g++ /usr/bin/cc /usr/bin/make \
            /root/.cache/pip; true
 
-# Make site-packages read-only
-RUN chmod -R a-w /opt/conda/lib/python3.11/site-packages 2>/dev/null; true
-
 # Create non-root sandbox user
 RUN groupadd -r sandbox && useradd -r -g sandbox -d /workspace -s /bin/bash sandbox
 RUN mkdir -p /data/images /output && chown -R sandbox:sandbox /workspace /data /output
