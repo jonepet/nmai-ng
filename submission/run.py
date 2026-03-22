@@ -398,8 +398,13 @@ def main() -> None:
     for idx, image_path in enumerate(image_paths):
         preds = run_ensemble_for_image(sessions, classifier, image_path)
         all_predictions.extend(preds)
-        if True:
-            print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions", flush=True)
+        print(f"  {idx + 1}/{len(image_paths)} images, {len(all_predictions)} predictions", flush=True)
+
+        # Write partial results every 10 images for incremental scoring
+        if (idx + 1) % 10 == 0 or idx == len(image_paths) - 1:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(all_predictions, f)
 
     # Hard cap at 49000 predictions to stay under competition limit of 50000
     MAX_PREDICTIONS = 49000

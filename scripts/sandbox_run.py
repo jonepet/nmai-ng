@@ -578,11 +578,38 @@ def run_sandbox(
 
     start = time.monotonic()
     returncode = None
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=str(submission_dir),
-        capture_output=False,  # let output flow to terminal
+        stdout=None,
+        stderr=None,
     )
+
+    # Monitor predictions file and score incrementally while run.py runs
+    last_scored_count = 0
+    while proc.poll() is None:
+        time.sleep(5)
+        if predictions_path.exists():
+            try:
+                with open(predictions_path) as f:
+                    partial_preds = json.load(f)
+                if len(partial_preds) > last_scored_count:
+                    last_scored_count = len(partial_preds)
+                    elapsed_so_far = time.monotonic() - start
+                    # Quick score
+                    try:
+                        partial_score = score_predictions(
+                            str(annotations_path), partial_preds, image_name_filter=None)
+                        det = partial_score["detection_map"]
+                        cls = partial_score["classification_map"]
+                        score = partial_score["score"]
+                        print(f"  [{elapsed_so_far:.0f}s] {last_scored_count} preds → "
+                              f"det={det:.3f} cls={cls:.3f} score={score:.3f}", flush=True)
+                    except Exception:
+                        pass
+            except (json.JSONDecodeError, OSError):
+                pass
+
     returncode = proc.returncode
     elapsed = time.monotonic() - start
     results["runtime"] = round(elapsed, 2)
