@@ -38,6 +38,7 @@ WBF_SCORE_THRESHOLD = _cfg["wbf_score_threshold"]
 CLASSIFIER_FILE = _cfg.get("classifier_file")
 CLASSIFIER_INPUT_SIZE = _cfg.get("classifier_input_size", 128)
 CLASSIFIER_CONF_THRESHOLD = _cfg.get("classifier_confidence_threshold", 0.3)
+CLASSIFIER_SCORE_BLEND = _cfg.get("classifier_score_blend", 0.3)
 
 # ImageNet normalization for classifier
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
@@ -188,20 +189,34 @@ def reclassify_detections(
     img: Image.Image,
     classifier: ort.InferenceSession,
 ) -> list[dict]:
-    """Reclassify only low-confidence YOLO detections using the product classifier."""
+    """Reclassify all detections using the dedicated product classifier.
+
+    The EfficientNet-B0 classifier is trained on canonical reference product
+    images and outperforms YOLO's joint detection+classification head on the
+    fine-grained 357-category grocery task.
+
+    Strategy:
+    - Always classify every detection (no YOLO-score gate).
+    - Override category_id when classifier_conf > CLASSIFIER_CONF_THRESHOLD.
+      With 357 classes, softmax random baseline is ~0.0028, so 0.3 is strong
+      signal even though it is below the old 0.5 guard.
+    - Blend the detection score: new_score = (1 - blend) * yolo_score
+      + blend * cls_conf. This lifts correctly-reclassified boxes in the
+      PR-curve ranking used for classification mAP (the 30% scoring component)
+      without significantly affecting detection mAP (category-blind).
+    """
     if not detections:
         return detections
 
-    # Only reclassify detections where YOLO is uncertain
+    # Collect crops for all non-tiny detections
     indices_to_classify = []
     crops = []
     for i, det in enumerate(detections):
-        if det["score"] < CLASSIFIER_CONF_THRESHOLD:
-            x, y, w, h = det["bbox"]
-            if w > 2 and h > 2:  # skip tiny crops
-                crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
-                crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
-                indices_to_classify.append(i)
+        x, y, w, h = det["bbox"]
+        if w > 2 and h > 2:  # skip degenerate crops
+            crop = img.crop((int(x), int(y), int(x + w), int(y + h)))
+            crops.append(preprocess_crop(crop, CLASSIFIER_INPUT_SIZE))
+            indices_to_classify.append(i)
 
     if not crops:
         return detections
@@ -221,8 +236,14 @@ def reclassify_detections(
         cls_id = int(np.argmax(probs))
         cls_conf = float(probs[cls_id])
 
-        if cls_conf > 0.5:  # only override if classifier is confident
+        if cls_conf > CLASSIFIER_CONF_THRESHOLD:
             detections[idx]["category_id"] = cls_id
+
+        # Blend score regardless of whether category was overridden:
+        # improves PR-curve ranking for the classification mAP component.
+        yolo_score = detections[idx]["score"]
+        blended = (1.0 - CLASSIFIER_SCORE_BLEND) * yolo_score + CLASSIFIER_SCORE_BLEND * cls_conf
+        detections[idx]["score"] = round(blended, 3)
 
     return detections
 
